@@ -1,0 +1,56 @@
+Goal:
+Create a self-contained local-first app inspired by Loom.com with user account support, local recording, transcription, and custom processing using user-supplied AI tokens.
+
+Core Features:
+
+Media Access and Recording
+
+Allow users to select and configure local devices: cameras, microphones, and screen sharing.
+Store user preferences for future sessions (e.g., preferred devices).
+Add a "Start Recording" button to initiate recording of:
+Selected video input (camera feed).
+Audio input (microphone feed).
+Screen sharing (specific screen/window).
+Save recordings locally in a structured format (e.g., MP4/WEBM for video, WAV/MP3 for audio).
+Transcription and AI Processing
+
+Once recording is complete:
+Transcribe the audio using an AI transcription tool (e.g., Whisper or another local-first transcription library).
+Process the transcription against a custom prompt defined by the user in a settings panel.
+Allow users to upload and configure their own API keys for LLMs like OpenAI GPT, Claude, etc., via a secure token manager.
+User Accounts and Project Management
+
+Implement basic user accounts (local authentication).
+Users should be able to log in and view prior recordings (projects).
+Store all project data (recordings, transcriptions, preferences) locally on the user’s device.
+Folder structure example: /MyAppData/{username}/{project_name}.
+Settings Panel
+
+Allow users to:
+Choose their preferred AI transcription tool.
+Set a custom processing prompt.
+Input and manage API tokens securely.
+UI/UX Considerations
+
+Simple, intuitive interface:
+Start/Stop recording button.
+List view of previous projects.
+Settings panel for user preferences and AI integration.
+Tech Stack Recommendations:
+
+Frontend: React (or simple web UI via HTML/CSS/JS)
+Media Access: MediaDevices API for video/audio/screen access.
+Transcription:
+Local-first: Whisper (optional local deployment).
+Cloud-based (fallback): OpenAI Whisper API.
+Local Storage:
+IndexedDB or local file system for projects, preferences, and recordings.
+LLM Integration: User-configurable API tokens for OpenAI, Claude, etc.
+User Authentication: Simple local storage authentication (e.g., username/password stored locally).
+Project Phases:
+
+Set up local media device access and recording functionality.
+Implement local storage for recordings and settings.
+Add transcription functionality.
+Add LLM integration for processing transcription outputs.
+Build user authentication and project management interface.
