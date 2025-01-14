@@ -7,10 +7,24 @@ import { eq, and } from 'drizzle-orm';
 
 // Get absolute path for recordings directory with user isolation
 export function getRecordingsPath(userId?: number) {
-  const basePath = join(process.cwd(), '.data');
+  // In production/staging, recordings are stored in the persistent .data directory
+  // In development, they're stored in the project root
+  const basePath = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging'
+    ? join(process.cwd(), '.data')
+    : join(process.cwd(), '.local-data');
+
+  // Create user-specific subdirectory if userId is provided
   const recordingsPath = userId 
     ? join(basePath, 'user-recordings', `user-${userId}`)
-    : join(basePath, 'user-recordings', 'default');
+    : join(basePath, 'audio-recordings');
+
+  console.log('Resolved recordings path:', {
+    basePath,
+    recordingsPath,
+    userId,
+    env: process.env.NODE_ENV,
+    timestamp: new Date().toISOString()
+  });
 
   return recordingsPath;
 }
@@ -19,39 +33,99 @@ export async function ensureStorageDirectory(userId?: number) {
   const recordingsPath = getRecordingsPath(userId);
 
   try {
-    // Create directory with all parent directories
+    console.log('Ensuring audio storage directory exists:', recordingsPath);
+
+    // Create all parent directories if needed
     await mkdir(recordingsPath, { recursive: true });
 
     // Set directory permissions to 755 (rwxr-xr-x)
     await chmod(recordingsPath, 0o755);
 
-    // Create .gitignore if it doesn't exist
+    // Verify directory is accessible
+    await access(recordingsPath, constants.R_OK | constants.W_OK);
+
+    // Create .gitignore in storage directory
     const gitignorePath = join(recordingsPath, '.gitignore');
     if (!existsSync(gitignorePath)) {
-      await fs.writeFile(gitignorePath, '*\n!.gitignore');
-      await chmod(gitignorePath, 0o644);
+      await fs.writeFile(gitignorePath, `*\n!.gitignore`);
     }
+
+    // Log directory configuration
+    const stats = await fs.stat(recordingsPath);
+    console.log('Storage directory configured:', {
+      path: recordingsPath,
+      exists: existsSync(recordingsPath),
+      mode: stats.mode.toString(8),
+      timestamp: new Date().toISOString()
+    });
 
     return recordingsPath;
   } catch (error) {
-    console.error('Storage directory configuration failed:', error);
+    console.error('Failed to configure storage directory:', {
+      path: recordingsPath,
+      error: error instanceof Error ? error.stack : String(error),
+      timestamp: new Date().toISOString()
+    });
     throw error;
   }
 }
 
+// Enhanced file validation with better error handling
 export async function isValidAudioFile(filename: string, userId: number): Promise<[boolean, string]> {
   try {
     const validExtensions = ['.webm', '.mp3', '.wav', '.ogg'];
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
 
     if (!validExtensions.includes(ext)) {
+      console.warn('Invalid audio file extension:', {
+        filename,
+        extension: ext,
+        userId,
+        timestamp: new Date().toISOString()
+      });
       return [false, 'Invalid file extension'];
     }
 
-    const recordingsPath = await ensureStorageDirectory(userId);
-    const filePath = join(recordingsPath, filename);
+    // Check both old and new locations during transition
+    const newPath = getRecordingsPath(userId);
+    const oldPath = join(process.cwd(), 'recordings');
 
-    if (!existsSync(filePath)) {
+    const newFilePath = join(newPath, filename);
+    const oldFilePath = join(oldPath, filename);
+
+    console.log('Checking file locations:', {
+      newPath: newFilePath,
+      oldPath: oldFilePath,
+      exists: {
+        new: existsSync(newFilePath),
+        old: existsSync(oldFilePath)
+      },
+      timestamp: new Date().toISOString()
+    });
+
+    // Try to access the file in both locations
+    let filePath: string | null = null;
+    if (existsSync(newFilePath)) {
+      filePath = newFilePath;
+    } else if (existsSync(oldFilePath)) {
+      // If file exists in old location, move it to new location
+      await ensureStorageDirectory(userId);
+      await fs.copyFile(oldFilePath, newFilePath);
+      await fs.unlink(oldFilePath);
+      filePath = newFilePath;
+      console.log('Moved file to new location:', {
+        from: oldFilePath,
+        to: newFilePath,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (!filePath) {
+      console.error('File not found in any location:', {
+        filename,
+        userId,
+        timestamp: new Date().toISOString()
+      });
       return [false, 'File not found'];
     }
 
@@ -68,16 +142,27 @@ export async function isValidAudioFile(filename: string, userId: number): Promis
     });
 
     if (!project) {
+      console.warn('Unauthorized file access attempt:', {
+        filename,
+        userId,
+        timestamp: new Date().toISOString()
+      });
       return [false, 'Unauthorized access'];
     }
 
     return [true, ''];
   } catch (error) {
-    console.error('Audio file validation error:', error);
+    console.error('Audio file validation error:', {
+      filename,
+      userId,
+      error: error instanceof Error ? error.stack : String(error),
+      timestamp: new Date().toISOString()
+    });
     return [false, 'Internal validation error'];
   }
 }
 
+// Add helper for getting content type
 export const getAudioContentType = (filename: string): string => {
   const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
   const mimeTypes: Record<string, string> = {
@@ -93,7 +178,14 @@ export async function cleanupOrphanedRecordings(userId?: number) {
   const recordingsPath = getRecordingsPath(userId);
 
   try {
+    console.log('Starting cleanup of orphaned recordings:', {
+      directory: recordingsPath,
+      userId,
+      timestamp: new Date().toISOString()
+    });
+
     if (!existsSync(recordingsPath)) {
+      console.log('No recordings directory found to clean:', recordingsPath);
       return;
     }
 
@@ -115,13 +207,27 @@ export async function cleanupOrphanedRecordings(userId?: number) {
         const filePath = join(recordingsPath, file);
         try {
           await fs.unlink(filePath);
-          console.log('Deleted orphaned recording:', filePath);
+          console.log('Deleted orphaned recording:', {
+            filePath,
+            userId,
+            timestamp: new Date().toISOString()
+          });
         } catch (error) {
-          console.error('Failed to delete orphaned recording:', filePath, error);
+          console.error('Failed to delete orphaned recording:', {
+            filePath,
+            userId,
+            error: error instanceof Error ? error.message : String(error),
+            timestamp: new Date().toISOString()
+          });
         }
       }
     }
   } catch (error) {
-    console.error('Error during recordings cleanup:', error);
+    console.error('Error during recordings cleanup:', {
+      directory: recordingsPath,
+      userId,
+      error: error instanceof Error ? error.stack : String(error),
+      timestamp: new Date().toISOString()
+    });
   }
 }
