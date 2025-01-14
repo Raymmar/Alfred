@@ -18,6 +18,14 @@ export function getRecordingsPath(userId?: number) {
     ? join(basePath, 'user-recordings', `user-${userId}`)
     : join(basePath, 'audio-recordings');
 
+  console.log('Resolved recordings path:', {
+    basePath,
+    recordingsPath,
+    userId,
+    env: process.env.NODE_ENV,
+    timestamp: new Date().toISOString()
+  });
+
   return recordingsPath;
 }
 
@@ -30,21 +38,26 @@ export async function ensureStorageDirectory(userId?: number) {
     // Create all parent directories if needed
     await mkdir(recordingsPath, { recursive: true });
 
-    // Set directory permissions - allow read/write/execute for owner and read/execute for others
+    // Set directory permissions to 755 (rwxr-xr-x)
     await chmod(recordingsPath, 0o755);
 
     // Verify directory is accessible
     await access(recordingsPath, constants.R_OK | constants.W_OK);
 
-    // Create .gitignore in each storage directory to ensure audio files are never tracked
-    const localGitignorePath = join(recordingsPath, '.gitignore');
-    if (!existsSync(localGitignorePath)) {
-      await fs.writeFile(localGitignorePath, `
-# Ignore all audio files
-*
-!.gitignore
-`.trim());
+    // Create .gitignore in storage directory
+    const gitignorePath = join(recordingsPath, '.gitignore');
+    if (!existsSync(gitignorePath)) {
+      await fs.writeFile(gitignorePath, `*\n!.gitignore`);
     }
+
+    // Log directory configuration
+    const stats = await fs.stat(recordingsPath);
+    console.log('Storage directory configured:', {
+      path: recordingsPath,
+      exists: existsSync(recordingsPath),
+      mode: stats.mode.toString(8),
+      timestamp: new Date().toISOString()
+    });
 
     return recordingsPath;
   } catch (error) {
@@ -57,7 +70,7 @@ export async function ensureStorageDirectory(userId?: number) {
   }
 }
 
-// Enhanced file validation with improved user ownership check
+// Enhanced file validation with better error handling
 export async function isValidAudioFile(filename: string, userId: number): Promise<[boolean, string]> {
   try {
     const validExtensions = ['.webm', '.mp3', '.wav', '.ogg'];
@@ -73,30 +86,53 @@ export async function isValidAudioFile(filename: string, userId: number): Promis
       return [false, 'Invalid file extension'];
     }
 
-    const recordingsPath = getRecordingsPath(userId);
-    const filePath = join(recordingsPath, filename);
+    // Check both old and new locations during transition
+    const newPath = getRecordingsPath(userId);
+    const oldPath = join(process.cwd(), 'recordings');
 
-    console.log('Validating audio file:', {
-      filename,
-      filePath,
-      userId,
-      exists: existsSync(filePath),
+    const newFilePath = join(newPath, filename);
+    const oldFilePath = join(oldPath, filename);
+
+    console.log('Checking file locations:', {
+      newPath: newFilePath,
+      oldPath: oldFilePath,
+      exists: {
+        new: existsSync(newFilePath),
+        old: existsSync(oldFilePath)
+      },
       timestamp: new Date().toISOString()
     });
 
-    try {
-      await access(filePath, constants.R_OK);
-    } catch (error) {
-      console.error('File access error:', {
-        filePath,
-        userId,
-        error: error instanceof Error ? error.message : String(error),
+    // Try to access the file in both locations
+    let filePath: string | null = null;
+    if (existsSync(newFilePath)) {
+      filePath = newFilePath;
+    } else if (existsSync(oldFilePath)) {
+      // If file exists in old location, move it to new location
+      await ensureStorageDirectory(userId);
+      await fs.copyFile(oldFilePath, newFilePath);
+      await fs.unlink(oldFilePath);
+      filePath = newFilePath;
+      console.log('Moved file to new location:', {
+        from: oldFilePath,
+        to: newFilePath,
         timestamp: new Date().toISOString()
       });
-      return [false, 'File not found or not accessible'];
     }
 
-    // Verify user ownership through database
+    if (!filePath) {
+      console.error('File not found in any location:', {
+        filename,
+        userId,
+        timestamp: new Date().toISOString()
+      });
+      return [false, 'File not found'];
+    }
+
+    // Set proper file permissions (644 - rw-r--r--)
+    await chmod(filePath, 0o644);
+
+    // Verify the file is associated with the user
     const [project] = await db.query.projects.findMany({
       where: and(
         eq(projects.userId, userId),
@@ -111,7 +147,7 @@ export async function isValidAudioFile(filename: string, userId: number): Promis
         userId,
         timestamp: new Date().toISOString()
       });
-      return [false, 'Unauthorized access - Recording not found in user projects'];
+      return [false, 'Unauthorized access'];
     }
 
     return [true, ''];
@@ -122,7 +158,7 @@ export async function isValidAudioFile(filename: string, userId: number): Promis
       error: error instanceof Error ? error.stack : String(error),
       timestamp: new Date().toISOString()
     });
-    return [false, 'Internal validation error - ' + (error instanceof Error ? error.message : String(error))];
+    return [false, 'Internal validation error'];
   }
 }
 
@@ -135,11 +171,9 @@ export const getAudioContentType = (filename: string): string => {
     '.wav': 'audio/wav',
     '.ogg': 'audio/ogg'
   };
-
   return mimeTypes[ext] || 'application/octet-stream';
 };
 
-// Enhanced cleanup function with better error handling and logging
 export async function cleanupOrphanedRecordings(userId?: number) {
   const recordingsPath = getRecordingsPath(userId);
 
@@ -155,10 +189,7 @@ export async function cleanupOrphanedRecordings(userId?: number) {
       return;
     }
 
-    // Get list of files in recordings directory
     const files = await fs.readdir(recordingsPath);
-
-    // Get all projects from database to check valid recordings
     const allProjects = await db.query.projects.findMany({
       where: userId ? eq(projects.userId, userId) : undefined
     });
@@ -167,29 +198,21 @@ export async function cleanupOrphanedRecordings(userId?: number) {
       allProjects.map((p) => p.recordingUrl).filter(Boolean)
     );
 
-    let cleanedCount = 0;
-    let errorCount = 0;
-
-    // Check each file in the directory
     for (const file of files) {
-      // Skip temp files and non-audio files
-      if (file.startsWith('temp_') || !file.match(/\.(webm|mp3|wav|ogg)$/i)) {
+      if (file === '.gitignore' || !file.match(/\.(webm|mp3|wav|ogg)$/i)) {
         continue;
       }
 
-      // If the file isn't associated with any project, delete it
       if (!validRecordings.has(file)) {
         const filePath = join(recordingsPath, file);
         try {
           await fs.unlink(filePath);
-          cleanedCount++;
           console.log('Deleted orphaned recording:', {
             filePath,
             userId,
             timestamp: new Date().toISOString()
           });
         } catch (error) {
-          errorCount++;
           console.error('Failed to delete orphaned recording:', {
             filePath,
             userId,
@@ -199,15 +222,6 @@ export async function cleanupOrphanedRecordings(userId?: number) {
         }
       }
     }
-
-    console.log('Cleanup completed:', {
-      directory: recordingsPath,
-      filesProcessed: files.length,
-      filesDeleted: cleanedCount,
-      errorCount,
-      userId,
-      timestamp: new Date().toISOString()
-    });
   } catch (error) {
     console.error('Error during recordings cleanup:', {
       directory: recordingsPath,
