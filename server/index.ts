@@ -1,7 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
-import { ensureStorageDirectory } from "./storage";
+import { ensureStorageDirectory, initializeStorage } from "./storage";
 import { setupAuth } from "./auth";
 
 interface CustomError extends Error {
@@ -44,29 +44,33 @@ app.use((req, res, next) => {
   next();
 });
 
-(async () => {
+async function startServer() {
+  console.log('Starting server initialization...');
+
   try {
-    console.log('Starting server initialization...');
+    // Step 1: Initialize storage system
+    console.log('Initializing storage system...');
+    await initializeStorage().catch(error => {
+      console.error('Storage initialization failed:', error);
+      throw new Error('Failed to initialize storage system');
+    });
+    console.log('Storage system initialized successfully');
 
-    // Ensure the recordings directory exists before setting up routes
-    try {
-      await ensureStorageDirectory();
-      console.log('Storage directory verified');
-    } catch (error) {
-      console.error('Failed to ensure storage directory:', error);
-      throw error;
-    }
+    // Step 2: Verify storage directories
+    console.log('Verifying storage directories...');
+    await ensureStorageDirectory().catch(error => {
+      console.error('Storage directory verification failed:', error);
+      throw new Error('Failed to verify storage directories');
+    });
+    console.log('Storage directories verified successfully');
 
-    // Setup authentication before registering routes
-    try {
-      setupAuth(app);
-      console.log('Authentication setup complete');
-    } catch (error) {
-      console.error('Failed to setup authentication:', error);
-      throw error;
-    }
+    // Step 3: Setup authentication
+    console.log('Setting up authentication...');
+    setupAuth(app);
+    console.log('Authentication setup completed');
 
-    console.log('Registering routes...');
+    // Step 4: Register routes
+    console.log('Registering application routes...');
     const server = await registerRoutes(app);
     console.log('Routes registered successfully');
 
@@ -80,7 +84,8 @@ app.use((req, res, next) => {
       console.error('Server error:', {
         error: err.stack || String(err),
         message: err.message || "Internal Server Error",
-        details: process.env.NODE_ENV === 'development' ? err : undefined
+        details: process.env.NODE_ENV === 'development' ? err : undefined,
+        timestamp: new Date().toISOString()
       });
 
       const status = (err as CustomError).status || (err as CustomError).statusCode || 500;
@@ -92,24 +97,33 @@ app.use((req, res, next) => {
       });
     });
 
-    // Setup Vite or static serving based on environment
+    // Step 5: Setup Vite or static serving based on environment
     console.log('Setting up server environment:', app.get('env'));
     if (app.get("env") === "development") {
-      await setupVite(app, server);
+      await setupVite(app, server).catch(error => {
+        console.error('Vite setup failed:', error);
+        throw new Error('Failed to setup Vite development server');
+      });
       console.log('Vite development server setup complete');
     } else {
       serveStatic(app);
       console.log('Static serving setup complete');
     }
 
-    // Start the server
+    // Step 6: Start the server
     const PORT = 5000;
     server.listen(PORT, "0.0.0.0", () => {
       log(`Server listening on port ${PORT}`);
     });
 
   } catch (error) {
-    console.error('Fatal error during server startup:', error);
+    console.error('Fatal error during server startup:', {
+      error: error instanceof Error ? error.stack : String(error),
+      timestamp: new Date().toISOString()
+    });
     process.exit(1);
   }
-})();
+}
+
+// Start the server
+startServer();
