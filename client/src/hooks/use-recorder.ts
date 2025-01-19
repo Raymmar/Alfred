@@ -18,8 +18,6 @@ export function useRecorder() {
   const currentOptions = useRef<RecorderOptions | null>(null);
   const canvasContext = useRef<CanvasRenderingContext2D | null>(null);
   const canvas = useRef<HTMLCanvasElement | null>(null);
-  const chunkCount = useRef(0);
-  const totalSize = useRef(0);
 
   const cleanup = useCallback((stopTracks = false) => {
     if (animationFrame.current) {
@@ -74,44 +72,12 @@ export function useRecorder() {
     analyser.current = null;
     dataArray.current = null;
     chunks.current = [];
-    chunkCount.current = 0;
-    totalSize.current = 0;
     setIsRecording(false);
   }, []);
 
-  // Function to periodically save and clear chunks
-  const processSavedChunks = async () => {
-    if (chunks.current.length === 0) return;
-
-    const currentChunks = chunks.current;
-    chunks.current = []; // Reset chunks array
-
-    try {
-      const blob = new Blob(currentChunks, { type: mediaRecorder.current?.mimeType || 'audio/webm;codecs=opus' });
-
-      // Create FormData and upload
-      const formData = new FormData();
-      const timestamp = Date.now();
-      const filename = `recording-${timestamp}-part-${chunkCount.current}.webm`;
-      formData.append('recording', blob, filename);
-
-      const response = await fetch('/api/recordings/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        console.error('Failed to upload chunk:', response.statusText);
-      }
-
-      chunkCount.current++;
-      console.log(`Processed chunk ${chunkCount.current}. Size: ${(blob.size / 1024 / 1024).toFixed(2)}MB`);
-    } catch (error) {
-      console.error('Error processing chunks:', error);
-    }
-  };
-
   const setupVisualization = useCallback((container: HTMLDivElement) => {
+    if (!container) return;
+
     canvas.current = document.createElement('canvas');
     canvas.current.style.width = '100%';
     canvas.current.style.height = '100%';
@@ -129,12 +95,6 @@ export function useRecorder() {
     if (canvasContext.current) {
       canvasContext.current.fillStyle = '#385F71';
     }
-
-    console.log('Visualization setup complete:', {
-      width: canvas.current.width,
-      height: canvas.current.height,
-      hasContext: !!canvasContext.current
-    });
   }, []);
 
   const visualize = useCallback(() => {
@@ -192,9 +152,9 @@ export function useRecorder() {
 
       const audioConstraints: MediaTrackConstraints = {
         deviceId: audioDeviceId ? { exact: audioDeviceId } : undefined,
-        echoCancellation: { ideal: true },
-        noiseSuppression: { ideal: true },
-        autoGainControl: { ideal: true },
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
       };
 
       const audioStream = await navigator.mediaDevices.getUserMedia({
@@ -204,6 +164,7 @@ export function useRecorder() {
 
       mediaStream.current = audioStream;
 
+      // Set up audio context and analyzer after getting stream
       audioContext.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       const source = audioContext.current.createMediaStreamSource(audioStream);
       analyser.current = audioContext.current.createAnalyser();
@@ -212,33 +173,22 @@ export function useRecorder() {
 
       dataArray.current = new Uint8Array(analyser.current.frequencyBinCount);
 
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-
-      // Increased chunk size to 5 seconds for better performance with long recordings
+      // Create and configure MediaRecorder
       const recorder = new MediaRecorder(audioStream, {
-        mimeType,
+        mimeType: 'audio/webm;codecs=opus',
         audioBitsPerSecond: 128000
       });
 
       chunks.current = [];
-      chunkCount.current = 0;
-      totalSize.current = 0;
 
-      recorder.ondataavailable = async (e) => {
-        if (e.data.size > 0) {
-          chunks.current.push(e.data);
-          totalSize.current += e.data.size;
-
-          // Process chunks when total size exceeds 10MB
-          if (totalSize.current >= 10 * 1024 * 1024) {
-            await processSavedChunks();
-            totalSize.current = 0;
-          }
+      // Handle incoming audio data
+      recorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data.size > 0) {
+          chunks.current.push(event.data);
         }
       };
 
+      // Set up error handler
       recorder.onerror = (event: Event) => {
         console.error('MediaRecorder error:', event);
         cleanup(true);
@@ -246,16 +196,16 @@ export function useRecorder() {
         throw new Error('Recording failed: ' + (error.message || 'Unknown error'));
       };
 
+      // Set up visualization
       setupVisualization(waveformRef);
 
+      // Start recording
       mediaRecorder.current = recorder;
-      // Increased timeslice to 5000ms (5 seconds) for more efficient chunking
-      recorder.start(5000);
+      recorder.start(100); // Collect data every 100ms for smoother visualization
       setIsRecording(true);
-
       visualize();
 
-      console.log('Recording started with optimized settings');
+      console.log('Recording started successfully');
 
     } catch (error) {
       console.error('Recording error:', error);
@@ -270,31 +220,29 @@ export function useRecorder() {
 
   const stopRecording = async () => {
     return new Promise<{ blob: Blob, filePath: string }>((resolve, reject) => {
-      if (!mediaRecorder.current || !mediaStream.current || !currentOptions.current) {
+      if (!mediaRecorder.current || mediaRecorder.current.state === 'inactive') {
+        cleanup(true);
         reject(new Error('No active recording found'));
         return;
       }
 
       mediaRecorder.current.onstop = async () => {
         try {
-          // Process any remaining chunks
-          await processSavedChunks();
-
-          if (chunkCount.current === 0 && chunks.current.length === 0) {
+          if (chunks.current.length === 0) {
             throw new Error('No audio data was recorded');
           }
 
-          const mimeType = mediaRecorder.current?.mimeType || 'audio/webm;codecs=opus';
-          const finalBlob = new Blob(chunks.current, { type: mimeType });
+          const finalBlob = new Blob(chunks.current, { 
+            type: 'audio/webm;codecs=opus'
+          });
 
           if (finalBlob.size === 0) {
             throw new Error('Recorded audio is empty');
           }
 
-          const timestamp = Date.now();
-          const filename = `recording-${timestamp}-final.webm`;
-
           const formData = new FormData();
+          const timestamp = Date.now();
+          const filename = `recording-${timestamp}.webm`;
           formData.append('recording', finalBlob, filename);
 
           const response = await fetch('/api/recordings/upload', {
@@ -307,7 +255,6 @@ export function useRecorder() {
           }
 
           const { filename: savedFilename } = await response.json();
-          console.log('Final recording uploaded:', savedFilename);
 
           cleanup(true);
           resolve({ blob: finalBlob, filePath: savedFilename });
