@@ -223,6 +223,7 @@ export async function createChatCompletion({
     includeCompleted: false
   });
 
+  // Build system message with enhanced contextual awareness
   let systemMessage = `You are Alfred, an intelligent AI assistant with comprehensive access to the user's recording library and task management system.
 
 Database Context:
@@ -235,6 +236,8 @@ Title: "${userData.latestRecording.title}"
 Created: ${userData.latestRecording.createdAt.toLocaleString()}
 Has Transcription: ${!!userData.latestRecording.transcription}
 Has Summary: ${!!userData.latestRecording.summary}
+${userData.latestRecording.transcription ? `\nTranscription Preview:\n${userData.latestRecording.transcription.substring(0, 500)}...` : ''}
+${userData.latestRecording.summary ? `\nSummary:\n${userData.latestRecording.summary}` : ''}
 ` : 'No recordings available.'}
 
 Available Projects and Recordings:
@@ -242,8 +245,8 @@ ${userData.projects.map(p => `
 Project: "${p.title}" (Created: ${p.createdAt.toLocaleString()})
 Type: ${p.isRecording ? 'Recording' : 'Project'}
 ${p.description ? `Description: ${p.description}` : ''}
-${p.transcription ? `Has Transcription: Yes` : ''}
-${p.summary ? `Has Summary: Yes` : ''}
+${p.transcription ? `Has Transcription: Yes\nTranscription Preview:\n${p.transcription.substring(0, 300)}...` : ''}
+${p.summary ? `\nSummary:\n${p.summary}` : ''}
 Tasks (${p.todoCount} total, ${p.completedTodos} completed):
 ${p.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'}, Created: ${t.createdAt.toLocaleString()})`).join('\n') || 'No tasks'}
 ${p.note ? `\nNotes (Last updated: ${p.note.updatedAt.toLocaleString()}):\n${p.note.content}` : ''}
@@ -271,10 +274,22 @@ Instructions:
 7. Consider both task relevance and project relationships when making suggestions
 8. When asked about recordings, provide both high-level summaries and specific details if available`;
 
-  if (context?.transcription || context?.summary) {
-    systemMessage += `\n\nCurrent Recording Context:
-${context.transcription ? `\nTranscript:\n${context.transcription}` : ''}
-${context.summary ? `\nSummary:\n${context.summary}` : ''}`;
+  // For project-specific chat, add focused context
+  if (context?.projectId) {
+    const projectContext = userData.projects.find(p => p.id === context.projectId);
+    if (projectContext) {
+      systemMessage += `\n\nFocused Project Context:
+Title: "${projectContext.title}"
+${projectContext.description ? `Description: ${projectContext.description}\n` : ''}
+Created: ${projectContext.createdAt.toLocaleString()}
+Tasks: ${projectContext.todoCount} total (${projectContext.completedTodos} completed)
+${projectContext.transcription ? `\nTranscription:\n${projectContext.transcription}` : ''}
+${projectContext.summary ? `\nSummary:\n${projectContext.summary}` : ''}
+${projectContext.note ? `\nNotes:\n${projectContext.note.content}` : ''}
+
+Current Tasks:
+${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'})`).join('\n') || 'No tasks'}`;
+    }
   }
 
   try {
@@ -296,6 +311,7 @@ ${context.summary ? `\nSummary:\n${context.summary}` : ''}`;
         userId,
         role: "user",
         content: message,
+        projectId: context?.projectId || null,
         timestamp: new Date(),
       }).returning();
 
@@ -303,6 +319,7 @@ ${context.summary ? `\nSummary:\n${context.summary}` : ''}`;
         userId,
         role: "assistant",
         content: assistantResponse,
+        projectId: context?.projectId || null,
         timestamp: new Date(),
       }).returning();
 
