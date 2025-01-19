@@ -60,30 +60,39 @@ type ProcessingProgress = {
 };
 
 async function processAudio(projectId: number): Promise<RequestResult<SelectProject>> {
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), 300000); // 5 minute timeout
+
   try {
     // Set up SSE for progress tracking
-    const progressEvents = new EventSource(`/api/projects/${projectId}/process/progress`);
+    const eventSource = new EventSource(`/api/projects/${projectId}/process/progress`);
     let lastProgress: ProcessingProgress | null = null;
 
-    progressEvents.onmessage = (event) => {
-      const progress: ProcessingProgress = JSON.parse(event.data);
-      console.log('Processing progress:', progress);
-      lastProgress = progress;
-    };
+    const progressPromise = new Promise<void>((resolve, reject) => {
+      eventSource.onmessage = (event) => {
+        const progress: ProcessingProgress = JSON.parse(event.data);
+        console.log('Processing progress:', progress);
+        lastProgress = progress;
+      };
 
-    progressEvents.onerror = (error) => {
-      console.error('Progress event error:', error);
-      progressEvents.close();
-    };
+      eventSource.onerror = (error) => {
+        console.error('Progress event error:', error);
+        eventSource.close();
+        // Don't reject on error, just close the connection
+        resolve();
+      };
+    });
 
     // Make the actual processing request
     const response = await fetch(`/api/projects/${projectId}/process`, {
       method: 'POST',
       credentials: 'include',
+      signal: abortController.signal
     });
 
     // Close SSE connection
-    progressEvents.close();
+    eventSource.close();
+    await progressPromise; // Ensure we process any remaining progress events
 
     const data = await response.json();
 
@@ -109,11 +118,21 @@ async function processAudio(projectId: number): Promise<RequestResult<SelectProj
 
     return { ok: true, data };
   } catch (e: any) {
+    // Check if this was an abort error
+    if (e.name === 'AbortError') {
+      return {
+        ok: false,
+        message: 'Processing request timed out or was interrupted'
+      };
+    }
+
     console.error('Audio processing error:', e);
     return { 
       ok: false, 
       message: e.message || 'An unexpected error occurred' 
     };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 
 interface RecorderOptions {
@@ -26,6 +26,7 @@ export function useRecorder() {
   const chunkInterval = useRef<NodeJS.Timeout>();
   const memoryCheckInterval = useRef<NodeJS.Timeout>();
   const uploadedChunks = useRef<string[]>([]);
+  const cleanupInProgress = useRef(false);
 
   // Monitor memory usage
   const checkMemoryUsage = useCallback(() => {
@@ -44,76 +45,131 @@ export function useRecorder() {
     }
   }, []);
 
-  const cleanup = useCallback((stopTracks = false) => {
-    if (chunkInterval.current) {
-      clearInterval(chunkInterval.current);
-      chunkInterval.current = undefined;
+  const cleanup = useCallback(async (stopTracks = false) => {
+    if (cleanupInProgress.current) {
+      console.log('Cleanup already in progress, skipping...');
+      return;
     }
 
-    if (memoryCheckInterval.current) {
-      clearInterval(memoryCheckInterval.current);
-      memoryCheckInterval.current = undefined;
-    }
-
-    if (animationFrame.current) {
-      cancelAnimationFrame(animationFrame.current);
-      animationFrame.current = undefined;
-    }
-
-    if (mediaStream.current && stopTracks) {
-      mediaStream.current.getTracks().forEach(track => {
-        try {
-          track.stop();
-        } catch (e) {
-          console.warn('Error stopping track:', e);
-        }
-      });
-      mediaStream.current = null;
-    }
-
-    if (mediaRecorder.current) {
-      try {
-        if (mediaRecorder.current.state !== 'inactive') {
-          mediaRecorder.current.stop();
-        }
-      } catch (e) {
-        console.warn('Error stopping recorder:', e);
+    cleanupInProgress.current = true;
+    try {
+      if (chunkInterval.current) {
+        clearInterval(chunkInterval.current);
+        chunkInterval.current = undefined;
       }
-      mediaRecorder.current = null;
-    }
 
-    if (audioContext.current) {
-      try {
-        audioContext.current.close();
-      } catch (e) {
-        console.warn('Error closing audio context:', e);
+      if (memoryCheckInterval.current) {
+        clearInterval(memoryCheckInterval.current);
+        memoryCheckInterval.current = undefined;
       }
-      audioContext.current = null;
-    }
 
-    if (canvas.current) {
-      try {
-        const parent = canvas.current.parentNode;
-        if (parent) {
-          parent.removeChild(canvas.current);
+      if (animationFrame.current) {
+        cancelAnimationFrame(animationFrame.current);
+        animationFrame.current = undefined;
+      }
+
+      const streamCleanup = async () => {
+        if (mediaStream.current && stopTracks) {
+          const tracks = mediaStream.current.getTracks();
+          await Promise.all(tracks.map(track => 
+            new Promise<void>(resolve => {
+              try {
+                track.stop();
+              } catch (e) {
+                console.warn('Error stopping track:', e);
+              }
+              resolve();
+            })
+          ));
+          mediaStream.current = null;
         }
-      } catch (e) {
-        console.warn('Error removing canvas:', e);
-      }
-      canvas.current = null;
-      canvasContext.current = null;
-    }
+      };
 
-    analyser.current = null;
-    dataArray.current = null;
-    chunks.current = [];
-    uploadedChunks.current = [];
-    setIsRecording(false);
-    setMemoryWarning(false);
+      const recorderCleanup = async () => {
+        if (mediaRecorder.current) {
+          try {
+            if (mediaRecorder.current.state !== 'inactive') {
+              await new Promise<void>((resolve, reject) => {
+                const onStop = () => {
+                  mediaRecorder.current?.removeEventListener('stop', onStop);
+                  resolve();
+                };
+                const onError = (error: Event) => {
+                  mediaRecorder.current?.removeEventListener('error', onError);
+                  reject(error);
+                };
+                mediaRecorder.current?.addEventListener('stop', onStop);
+                mediaRecorder.current?.addEventListener('error', onError);
+                mediaRecorder.current?.stop();
+              });
+            }
+          } catch (e) {
+            console.warn('Error stopping recorder:', e);
+          }
+          mediaRecorder.current = null;
+        }
+      };
+
+      const audioContextCleanup = async () => {
+        if (audioContext.current) {
+          try {
+            await audioContext.current.close();
+          } catch (e) {
+            console.warn('Error closing audio context:', e);
+          }
+          audioContext.current = null;
+        }
+      };
+
+      const canvasCleanup = () => {
+        if (canvas.current) {
+          try {
+            const parent = canvas.current.parentNode;
+            if (parent) {
+              parent.removeChild(canvas.current);
+            }
+          } catch (e) {
+            console.warn('Error removing canvas:', e);
+          }
+          canvas.current = null;
+          canvasContext.current = null;
+        }
+      };
+
+      // Execute all cleanup tasks
+      await Promise.all([
+        streamCleanup(),
+        recorderCleanup(),
+        audioContextCleanup()
+      ]);
+
+      canvasCleanup();
+
+      analyser.current = null;
+      dataArray.current = null;
+      chunks.current = [];
+      uploadedChunks.current = [];
+      setIsRecording(false);
+      setMemoryWarning(false);
+
+    } catch (error) {
+      console.error('Error during cleanup:', error);
+    } finally {
+      cleanupInProgress.current = false;
+    }
   }, []);
+
+  // Use useEffect to handle cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cleanup(true).catch(console.error);
+    };
+  }, [cleanup]);
 
   const uploadChunk = async (audioBlob: Blob, isLastChunk = false): Promise<string> => {
     let retries = 3;
+    let lastError: Error | null = null;
+
     while (retries > 0) {
       try {
         const formData = new FormData();
@@ -126,26 +182,38 @@ export function useRecorder() {
           formData.append('previousChunks', JSON.stringify(uploadedChunks.current));
         }
 
-        const response = await fetch('/api/recordings/upload', {
-          method: 'POST',
-          body: formData,
-        });
+        const abortController = new AbortController();
+        const timeoutId = setTimeout(() => abortController.abort(), 30000); // 30 second timeout
 
-        if (!response.ok) {
-          throw new Error('Failed to upload chunk');
+        try {
+          const response = await fetch('/api/recordings/upload', {
+            method: 'POST',
+            body: formData,
+            signal: abortController.signal
+          });
+
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            throw new Error(`Upload failed with status: ${response.status}`);
+          }
+
+          const { filename: savedFilename } = await response.json();
+          uploadedChunks.current.push(savedFilename);
+          return savedFilename;
+        } finally {
+          clearTimeout(timeoutId);
         }
-
-        const { filename: savedFilename } = await response.json();
-        uploadedChunks.current.push(savedFilename);
-        return savedFilename;
       } catch (error) {
         console.error('Error uploading chunk:', error);
+        lastError = error as Error;
         retries--;
-        if (retries === 0) throw error;
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait before retry
+        if (retries > 0) {
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Wait before retry
+        }
       }
     }
-    throw new Error('Failed to upload chunk after retries');
+    throw lastError || new Error('Failed to upload chunk after retries');
   };
 
   const saveCurrentChunk = async () => {
@@ -373,5 +441,6 @@ export function useRecorder() {
     memoryWarning,
     startRecording,
     stopRecording,
+    cleanup, // Export cleanup for external use
   };
 }
