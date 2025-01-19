@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 
 interface RecorderOptions {
@@ -8,11 +8,9 @@ interface RecorderOptions {
 
 const CHUNK_INTERVAL = 300000; // Save every 5 minutes
 const MAX_CHUNKS_IN_MEMORY = 3; // Keep only last 3 chunks in memory
-const MEMORY_CHECK_INTERVAL = 60000; // Check memory usage every minute
 
 export function useRecorder() {
   const [isRecording, setIsRecording] = useState(false);
-  const [memoryWarning, setMemoryWarning] = useState(false);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const mediaStream = useRef<MediaStream | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
@@ -24,196 +22,98 @@ export function useRecorder() {
   const canvasContext = useRef<CanvasRenderingContext2D | null>(null);
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const chunkInterval = useRef<NodeJS.Timeout>();
-  const memoryCheckInterval = useRef<NodeJS.Timeout>();
   const uploadedChunks = useRef<string[]>([]);
-  const cleanupInProgress = useRef(false);
 
-  // Monitor memory usage
-  const checkMemoryUsage = useCallback(() => {
-    if ('memory' in performance) {
-      const memory = (performance as any).memory;
-      const usageRatio = memory.usedJSHeapSize / memory.jsHeapSizeLimit;
-
-      // Warn if memory usage is above 70%
-      if (usageRatio > 0.7) {
-        setMemoryWarning(true);
-        // Force chunk save to free up memory
-        saveCurrentChunk().catch(console.error);
-      } else {
-        setMemoryWarning(false);
-      }
+  const cleanup = useCallback((stopTracks = false) => {
+    if (chunkInterval.current) {
+      clearInterval(chunkInterval.current);
+      chunkInterval.current = undefined;
     }
+
+    if (animationFrame.current) {
+      cancelAnimationFrame(animationFrame.current);
+      animationFrame.current = undefined;
+    }
+
+    if (mediaStream.current && stopTracks) {
+      mediaStream.current.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (e) {
+          console.warn('Error stopping track:', e);
+        }
+      });
+      mediaStream.current = null;
+    }
+
+    if (mediaRecorder.current) {
+      try {
+        if (mediaRecorder.current.state !== 'inactive') {
+          mediaRecorder.current.stop();
+        }
+      } catch (e) {
+        console.warn('Error stopping recorder:', e);
+      }
+      mediaRecorder.current = null;
+    }
+
+    if (audioContext.current) {
+      try {
+        audioContext.current.close();
+      } catch (e) {
+        console.warn('Error closing audio context:', e);
+      }
+      audioContext.current = null;
+    }
+
+    if (canvas.current) {
+      try {
+        const parent = canvas.current.parentNode;
+        if (parent) {
+          parent.removeChild(canvas.current);
+        }
+      } catch (e) {
+        console.warn('Error removing canvas:', e);
+      }
+      canvas.current = null;
+      canvasContext.current = null;
+    }
+
+    analyser.current = null;
+    dataArray.current = null;
+    chunks.current = [];
+    uploadedChunks.current = [];
+    setIsRecording(false);
   }, []);
-
-  const cleanup = useCallback(async (stopTracks = false) => {
-    if (cleanupInProgress.current) {
-      console.log('Cleanup already in progress, skipping...');
-      return;
-    }
-
-    cleanupInProgress.current = true;
-    try {
-      if (chunkInterval.current) {
-        clearInterval(chunkInterval.current);
-        chunkInterval.current = undefined;
-      }
-
-      if (memoryCheckInterval.current) {
-        clearInterval(memoryCheckInterval.current);
-        memoryCheckInterval.current = undefined;
-      }
-
-      if (animationFrame.current) {
-        cancelAnimationFrame(animationFrame.current);
-        animationFrame.current = undefined;
-      }
-
-      const streamCleanup = async () => {
-        if (mediaStream.current && stopTracks) {
-          const tracks = mediaStream.current.getTracks();
-          await Promise.all(tracks.map(track => 
-            new Promise<void>(resolve => {
-              try {
-                track.stop();
-              } catch (e) {
-                console.warn('Error stopping track:', e);
-              }
-              resolve();
-            })
-          ));
-          mediaStream.current = null;
-        }
-      };
-
-      const recorderCleanup = async () => {
-        if (mediaRecorder.current) {
-          try {
-            if (mediaRecorder.current.state !== 'inactive') {
-              await new Promise<void>((resolve, reject) => {
-                const onStop = () => {
-                  mediaRecorder.current?.removeEventListener('stop', onStop);
-                  resolve();
-                };
-                const onError = (error: Event) => {
-                  mediaRecorder.current?.removeEventListener('error', onError);
-                  reject(error);
-                };
-                mediaRecorder.current?.addEventListener('stop', onStop);
-                mediaRecorder.current?.addEventListener('error', onError);
-                mediaRecorder.current?.stop();
-              });
-            }
-          } catch (e) {
-            console.warn('Error stopping recorder:', e);
-          }
-          mediaRecorder.current = null;
-        }
-      };
-
-      const audioContextCleanup = async () => {
-        if (audioContext.current) {
-          try {
-            await audioContext.current.close();
-          } catch (e) {
-            console.warn('Error closing audio context:', e);
-          }
-          audioContext.current = null;
-        }
-      };
-
-      const canvasCleanup = () => {
-        if (canvas.current) {
-          try {
-            const parent = canvas.current.parentNode;
-            if (parent) {
-              parent.removeChild(canvas.current);
-            }
-          } catch (e) {
-            console.warn('Error removing canvas:', e);
-          }
-          canvas.current = null;
-          canvasContext.current = null;
-        }
-      };
-
-      // Execute all cleanup tasks
-      await Promise.all([
-        streamCleanup(),
-        recorderCleanup(),
-        audioContextCleanup()
-      ]);
-
-      canvasCleanup();
-
-      analyser.current = null;
-      dataArray.current = null;
-      chunks.current = [];
-      uploadedChunks.current = [];
-      setIsRecording(false);
-      setMemoryWarning(false);
-
-    } catch (error) {
-      console.error('Error during cleanup:', error);
-    } finally {
-      cleanupInProgress.current = false;
-    }
-  }, []);
-
-  // Use useEffect to handle cleanup on unmount
-  useEffect(() => {
-    return () => {
-      cleanup(true).catch(console.error);
-    };
-  }, [cleanup]);
 
   const uploadChunk = async (audioBlob: Blob, isLastChunk = false): Promise<string> => {
-    let retries = 3;
-    let lastError: Error | null = null;
+    const formData = new FormData();
+    const timestamp = Date.now();
+    const filename = `recording-${timestamp}-${isLastChunk ? 'final' : 'chunk'}.webm`;
+    formData.append('recording', audioBlob, filename);
+    formData.append('isLastChunk', String(isLastChunk));
 
-    while (retries > 0) {
-      try {
-        const formData = new FormData();
-        const timestamp = Date.now();
-        const filename = `recording-${timestamp}-${isLastChunk ? 'final' : 'chunk'}.webm`;
-        formData.append('recording', audioBlob, filename);
-        formData.append('isLastChunk', String(isLastChunk));
-
-        if (uploadedChunks.current.length > 0) {
-          formData.append('previousChunks', JSON.stringify(uploadedChunks.current));
-        }
-
-        const abortController = new AbortController();
-        const timeoutId = setTimeout(() => abortController.abort(), 30000); // 30 second timeout
-
-        try {
-          const response = await fetch('/api/recordings/upload', {
-            method: 'POST',
-            body: formData,
-            signal: abortController.signal
-          });
-
-          clearTimeout(timeoutId);
-
-          if (!response.ok) {
-            throw new Error(`Upload failed with status: ${response.status}`);
-          }
-
-          const { filename: savedFilename } = await response.json();
-          uploadedChunks.current.push(savedFilename);
-          return savedFilename;
-        } finally {
-          clearTimeout(timeoutId);
-        }
-      } catch (error) {
-        console.error('Error uploading chunk:', error);
-        lastError = error as Error;
-        retries--;
-        if (retries > 0) {
-          await new Promise(resolve => setTimeout(resolve, 1000)); // Wait before retry
-        }
-      }
+    if (uploadedChunks.current.length > 0) {
+      formData.append('previousChunks', JSON.stringify(uploadedChunks.current));
     }
-    throw lastError || new Error('Failed to upload chunk after retries');
+
+    try {
+      const response = await fetch('/api/recordings/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to upload chunk');
+      }
+
+      const { filename: savedFilename } = await response.json();
+      uploadedChunks.current.push(savedFilename);
+      return savedFilename;
+    } catch (error) {
+      console.error('Error uploading chunk:', error);
+      throw error;
+    }
   };
 
   const saveCurrentChunk = async () => {
@@ -376,9 +276,6 @@ export function useRecorder() {
         saveCurrentChunk().catch(console.error);
       }, CHUNK_INTERVAL);
 
-      // Set up memory monitoring
-      memoryCheckInterval.current = setInterval(checkMemoryUsage, MEMORY_CHECK_INTERVAL);
-
       setIsRecording(true);
       visualize();
 
@@ -438,9 +335,7 @@ export function useRecorder() {
 
   return {
     isRecording,
-    memoryWarning,
     startRecording,
     stopRecording,
-    cleanup, // Export cleanup for external use
   };
 }
