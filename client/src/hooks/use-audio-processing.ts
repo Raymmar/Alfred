@@ -53,12 +53,37 @@ function isEmptyTaskResponse(text: string): boolean {
   });
 }
 
+type ProcessingProgress = {
+  stage: 'transcribing' | 'summarizing' | 'extracting_tasks';
+  percent: number;
+  message: string;
+};
+
 async function processAudio(projectId: number): Promise<RequestResult<SelectProject>> {
   try {
+    // Set up SSE for progress tracking
+    const progressEvents = new EventSource(`/api/projects/${projectId}/process/progress`);
+    let lastProgress: ProcessingProgress | null = null;
+
+    progressEvents.onmessage = (event) => {
+      const progress: ProcessingProgress = JSON.parse(event.data);
+      console.log('Processing progress:', progress);
+      lastProgress = progress;
+    };
+
+    progressEvents.onerror = (error) => {
+      console.error('Progress event error:', error);
+      progressEvents.close();
+    };
+
+    // Make the actual processing request
     const response = await fetch(`/api/projects/${projectId}/process`, {
       method: 'POST',
       credentials: 'include',
     });
+
+    // Close SSE connection
+    progressEvents.close();
 
     const data = await response.json();
 
@@ -97,11 +122,29 @@ export function useAudioProcessing() {
 
   const processAudioMutation = useMutation({
     mutationFn: processAudio,
+    onMutate: async (projectId) => {
+      // Optimistically update UI to show processing state
+      await queryClient.cancelQueries({ queryKey: ['projects', projectId] });
+      const previousProject = queryClient.getQueryData(['projects', projectId]);
+
+      queryClient.setQueryData(['projects', projectId], (old: any) => ({
+        ...old,
+        status: 'processing',
+      }));
+
+      return { previousProject };
+    },
     onSuccess: (result) => {
       if (result.ok) {
         // Invalidate both projects and todos queries to refresh task list
         queryClient.invalidateQueries({ queryKey: ['projects'] });
         queryClient.invalidateQueries({ queryKey: ['todos'] });
+      }
+    },
+    onError: (_err, _projectId, context) => {
+      // Revert optimistic update on error
+      if (context?.previousProject) {
+        queryClient.setQueryData(['projects', _projectId], context.previousProject);
       }
     },
   });
