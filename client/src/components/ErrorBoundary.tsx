@@ -25,11 +25,20 @@ class ErrorBoundary extends Component<Props, State> {
 
   public render() {
     if (this.state.hasError) {
-      // Check if the error is a WebSocket abort error
-      const isWebSocketError = this.state.error?.message?.includes('aborted');
-      
+      // Check for development-specific WebSocket errors
+      const isWebSocketError = (
+        this.state.error?.message?.includes('aborted') ||
+        this.state.error?.message?.toLowerCase().includes('websocket') ||
+        this.state.error?.stack?.includes('ws') ||
+        this.state.error?.stack?.includes('WebSocket')
+      );
+
       // If it's a WebSocket error during development, don't show anything
       if (isWebSocketError && import.meta.env.DEV) {
+        // Reset error state to prevent error UI from showing
+        setTimeout(() => {
+          this.setState({ hasError: false, error: undefined });
+        }, 0);
         return this.props.children;
       }
 
@@ -42,7 +51,10 @@ class ErrorBoundary extends Component<Props, State> {
               {this.state.error?.message || 'An unexpected error occurred'}
             </p>
             <button
-              onClick={() => window.location.reload()}
+              onClick={() => {
+                this.setState({ hasError: false, error: undefined });
+                window.location.reload();
+              }}
               className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
             >
               Reload page
