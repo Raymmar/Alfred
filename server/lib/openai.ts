@@ -21,17 +21,12 @@ export function isEmptyTaskResponse(text: string): boolean {
     return true;
   }
 
+  // More focused list of phrases that indicate no tasks
   const excludedPhrases = [
     "no task",
     "no tasks",
     "no deliverable",
     "no deliverables",
-    "no tasks identified",
-    "no deliverables identified",
-    "no tasks or deliverables",
-    "no tasks or deliverables identified",
-    "no specific tasks",
-    "no specific deliverables",
     "none identified",
     "could not identify",
     "unable to identify",
@@ -115,6 +110,139 @@ interface ChatOptions {
   };
 }
 
+export async function createChatCompletion({
+  userId,
+  message,
+  context,
+}: ChatOptions) {
+  const user = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+  });
+
+  if (!user) {
+    throw new Error("User not found");
+  }
+
+  const userSettings = await db.query.settings.findFirst({
+    where: eq(settings.userId, userId),
+  });
+
+  const apiKey = userSettings?.openAiKey || user.openaiApiKey;
+
+  if (!apiKey) {
+    throw new Error("OpenAI API key not found. Please add your API key in settings.");
+  }
+
+  // Get user's custom task extraction prompt or use default
+  const taskExtractionPrompt = user.todoPrompt || `Please analyze the transcript and identify specific, actionable tasks that were mentioned or implied.
+Key points to consider:
+1. Tasks should be clear and actionable
+2. Include any mentioned deadlines or timeframes
+3. Capture assignments or responsibilities
+4. Include follow-up items or next steps
+5. Note any decisions that require action
+
+Format each task as a separate line. Do not include explanations or commentary.`;
+
+  const openai = new OpenAI({
+    apiKey,
+  });
+
+  try {
+    let promptContent = message;
+    let systemPrompt = user.defaultPrompt || `You are a helpful AI assistant analyzing audio transcripts and identifying key information.`;
+
+    // If this is a task extraction request
+    if (message.toLowerCase().includes('identify') && message.toLowerCase().includes('tasks')) {
+      systemPrompt = taskExtractionPrompt;
+
+      // Enhanced context for task extraction
+      if (context?.transcription || context?.summary) {
+        promptContent = `Here is the relevant context for task extraction:
+${context.summary ? `\nSummary of Discussion:\n${context.summary}\n` : ''}
+${context.transcription ? `\nDetailed Transcript:\n${context.transcription}` : ''}
+
+Please identify all actionable tasks, follow-up items, and commitments discussed in this conversation.`;
+      }
+    }
+
+    console.log('OpenAI Request:', {
+      systemPrompt,
+      userMessage: promptContent,
+      isTaskExtraction: message.toLowerCase().includes('tasks'),
+      hasTranscript: !!context?.transcription,
+      hasSummary: !!context?.summary
+    });
+
+    const response = await openai.chat.completions.create({
+      model: CHAT_MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: promptContent },
+      ],
+      temperature: 0.7,
+      max_tokens: 500,
+    });
+
+    const assistantResponse = response.choices[0].message.content || "";
+    console.log('GPT response:', assistantResponse);
+
+    // Store the chat interaction
+    const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
+      const [userMsg] = await tx.insert(chats).values({
+        userId,
+        role: "user",
+        content: message,
+        timestamp: new Date(),
+      }).returning();
+
+      const [assistantMsg] = await tx.insert(chats).values({
+        userId,
+        role: "assistant",
+        content: assistantResponse,
+        timestamp: new Date(),
+      }).returning();
+
+      return [userMsg, assistantMsg];
+    });
+
+    // Create embeddings for the chat messages
+    await Promise.all([
+      createEmbedding({
+        contentType: 'chat',
+        contentId: userMessage.id,
+        contentText: message,
+      }),
+      createEmbedding({
+        contentType: 'chat',
+        contentId: assistantMessage.id,
+        contentText: assistantResponse,
+      })
+    ]);
+
+    return {
+      message: assistantResponse,
+      context: {
+        isTaskExtraction: message.toLowerCase().includes('tasks'),
+        responseLength: assistantResponse.length,
+      }
+    };
+  } catch (error: any) {
+    console.error("OpenAI API error:", error);
+    throw new Error(error.message || "Failed to generate response");
+  }
+}
+
+interface ChatOptions {
+  userId: number;
+  message: string;
+  context?: {
+    transcription?: string | null;
+    summary?: string | null;
+    projectId?: number;
+  };
+}
+
 async function getContextData(userId: number) {
   const userProjects = await db.query.projects.findMany({
     where: eq(projects.userId, userId),
@@ -185,153 +313,4 @@ function formatContextForPrompt(enhancedContext: any[]): string {
     })
     .filter(Boolean)
     .join('\n\n');
-}
-
-export async function createChatCompletion({
-  userId,
-  message,
-  context,
-}: ChatOptions) {
-  const user = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-  });
-
-  if (!user) {
-    throw new Error("User not found");
-  }
-
-  const userSettings = await db.query.settings.findFirst({
-    where: eq(settings.userId, userId),
-  });
-
-  const apiKey = userSettings?.openAiKey || user.openaiApiKey;
-
-  if (!apiKey) {
-    throw new Error("OpenAI API key not found. Please add your API key in settings.");
-  }
-
-  const openai = new OpenAI({
-    apiKey,
-  });
-
-  const userData = await getContextData(userId);
-  const { enhancedContext, similarityScore } = await updateChatContext(userId, message);
-
-  const { recommendations: recommendedTasks } = await findRecommendedTasks(userId, message, {
-    limit: 5,
-    minSimilarity: 0.5,
-    includeCompleted: false
-  });
-
-  let systemMessage = `You are Alfred, an intelligent AI assistant with comprehensive access to the user's recording library and task management system.
-
-Database Context:
-Total Projects: ${userData.totalProjects}
-Total Recordings: ${userData.totalRecordings}
-Total Tasks: ${userData.totalTodos} (${userData.totalCompletedTodos} completed)
-
-${userData.latestRecording ? `Latest Recording:
-Title: "${userData.latestRecording.title}"
-Created: ${userData.latestRecording.createdAt.toLocaleString()}
-Has Transcription: ${!!userData.latestRecording.transcription}
-Has Summary: ${!!userData.latestRecording.summary}
-` : 'No recordings available.'}
-
-Available Projects and Recordings:
-${userData.projects.map(p => `
-Project: "${p.title}" (Created: ${p.createdAt.toLocaleString()})
-Type: ${p.isRecording ? 'Recording' : 'Project'}
-${p.description ? `Description: ${p.description}` : ''}
-${p.transcription ? `Has Transcription: Yes` : ''}
-${p.summary ? `Has Summary: Yes` : ''}
-Tasks (${p.todoCount} total, ${p.completedTodos} completed):
-${p.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'}, Created: ${t.createdAt.toLocaleString()})`).join('\n') || 'No tasks'}
-${p.note ? `\nNotes (Last updated: ${p.note.updatedAt.toLocaleString()}):\n${p.note.content}` : ''}
-`).join('\n')}
-
-Relevant Context:
-${formatContextForPrompt(enhancedContext)}
-
-Recommended Tasks Based on Current Context:
-${recommendedTasks.length > 0
-    ? recommendedTasks.map(task =>
-      `- [${task.completed ? 'Completed' : 'Pending'}] ${task.text}${
-        task.projectTitle ? ` (Project: ${task.projectTitle})` : ''
-      }`
-    ).join('\n')
-    : 'No specifically relevant tasks found for this conversation.'}
-
-Instructions:
-1. Use the provided context to give informed responses about recordings and projects
-2. When asked about "last recording" or "recent recording", refer to the Latest Recording section
-3. Maintain conversation continuity by referencing previous interactions
-4. Be concise. Do not add any filler words or pleasantries to your responses.
-5. If recommending actions, prioritize suggesting tasks from the recommended tasks list
-6. When discussing tasks, reference their current status and project context
-7. Consider both task relevance and project relationships when making suggestions
-8. When asked about recordings, provide both high-level summaries and specific details if available`;
-
-  if (context?.transcription || context?.summary) {
-    systemMessage += `\n\nCurrent Recording Context:
-${context.transcription ? `\nTranscript:\n${context.transcription}` : ''}
-${context.summary ? `\nSummary:\n${context.summary}` : ''}`;
-  }
-
-  try {
-    const response = await openai.chat.completions.create({
-      model: CHAT_MODEL,
-      messages: [
-        { role: "system", content: systemMessage },
-        { role: "user", content: message },
-      ],
-      temperature: 0.7,
-      max_tokens: 500,
-    });
-
-    const assistantResponse = response.choices[0].message.content || "";
-    console.log('GPT response:', assistantResponse);
-
-    const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
-      const [userMsg] = await tx.insert(chats).values({
-        userId,
-        role: "user",
-        content: message,
-        timestamp: new Date(),
-      }).returning();
-
-      const [assistantMsg] = await tx.insert(chats).values({
-        userId,
-        role: "assistant",
-        content: assistantResponse,
-        timestamp: new Date(),
-      }).returning();
-
-      return [userMsg, assistantMsg];
-    });
-
-    await Promise.all([
-      createEmbedding({
-        contentType: 'chat',
-        contentId: userMessage.id,
-        contentText: message,
-      }),
-      createEmbedding({
-        contentType: 'chat',
-        contentId: assistantMessage.id,
-        contentText: assistantResponse,
-      })
-    ]);
-
-    return {
-      message: assistantResponse,
-      context: {
-        similarityScore,
-        contextCount: enhancedContext.length,
-        recommendedTasks: recommendedTasks.length
-      }
-    };
-  } catch (error: any) {
-    console.error("OpenAI API error:", error);
-    throw new Error(error.message || "Failed to generate response");
-  }
 }
