@@ -149,20 +149,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           timestamp: new Date().toISOString()
         });
 
-        // Enhanced validation with user ownership check
-        const [isValid, validationError] = await isValidAudioFile(filename, req.user!.id);
-
-        if (!isValid) {
-          console.warn('Audio file validation failed:', {
+        // Check if file exists first
+        if (!fs.existsSync(filePath)) {
+          console.error('File not found:', {
             filename,
             userId: req.user?.id,
-            error: validationError,
+            path: filePath,
             timestamp: new Date().toISOString()
           });
-
-          return res.status(403).json({
-            message: "Access denied",
-            details: validationError,
+          return res.status(404).json({
+            message: "Recording not found",
+            details: "The requested audio file does not exist",
             requestInfo: {
               filename,
               userId: req.user?.id,
@@ -186,6 +183,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(500).json({
             message: "Error accessing file",
             details: "Could not get file information",
+            requestInfo: {
+              filename,
+              userId: req.user?.id,
+              timestamp: new Date().toISOString()
+            }
+          });
+        }
+
+        // Verify file ownership after we know the file exists
+        const [project] = await db.query.projects.findMany({
+          where: and(
+            eq(projects.userId, req.user!.id),
+            eq(projects.recordingUrl, filename)
+          ),
+          limit: 1,
+        });
+
+        if (!project) {
+          console.warn('Unauthorized file access attempt:', {
+            filename,
+            userId: req.user?.id,
+            timestamp: new Date().toISOString()
+          });
+          return res.status(403).json({
+            message: "Access denied",
+            details: "You do not have permission to access this recording",
             requestInfo: {
               filename,
               userId: req.user?.id,
@@ -225,25 +248,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             'X-Content-Type-Options': 'nosniff'
           });
 
-          try {
-            fileStream = fs.createReadStream(filePath, { start, end });
-          } catch (error) {
-            console.error('Error creating read stream:', {
-              filename,
-              userId: req.user?.id,
-              error: error instanceof Error ? error.message : String(error),
-              timestamp: new Date().toISOString()
-            });
-            return res.status(500).json({
-              message: "Error streaming file",
-              details: "Could not create file stream",
-              requestInfo: {
-                filename,
-                userId: req.user?.id,
-                timestamp: new Date().toISOString()
-              }
-            });
-          }
+          fileStream = fs.createReadStream(filePath, { start, end });
         } else {
           console.log('Processing full file request:', {
             filename,
@@ -262,25 +267,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             'X-Content-Type-Options': 'nosniff'
           });
 
-          try {
-            fileStream = fs.createReadStream(filePath);
-          } catch (error) {
-            console.error('Error creating read stream:', {
-              filename,
-              userId: req.user?.id,
-              error: error instanceof Error ? error.message : String(error),
-              timestamp: new Date().toISOString()
-            });
-            return res.status(500).json({
-              message: "Error streaming file",
-              details: "Could not create file stream",
-              requestInfo: {
-                filename,
-                userId: req.user?.id,
-                timestamp: new Date().toISOString()
-              }
-            });
-          }
+          fileStream = fs.createReadStream(filePath);
         }
 
         // Handle stream errors
@@ -295,12 +282,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (!res.headersSent) {
             res.status(500).json({
               message: "Error streaming audio file",
-              error: error instanceof Error ? error.message : String(error),
-              requestInfo: {
-                filename,
-                userId: req.user?.id,
-                timestamp: new Date().toISOString()
-              }
+              error: error instanceof Error ? error.message : String(error)
             });
           }
           fileStream?.destroy();
@@ -329,11 +311,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!res.headersSent) {
           res.status(500).json({
             message: "Error serving audio file",
-            error: error instanceof Error ? error.message : String(error),
-            requestInfo: {
-              userId: req.user?.id,
-              timestamp: new Date().toISOString()
-            }
+            error: error instanceof Error ? error.message : String(error)
           });
         }
       }
@@ -969,90 +947,89 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         const [project] = await db.query.projects.findMany({
-          where: eq(projects.id, projectId),
-          limit: 1,
-          with: {
-            note: true,
-          },
-        });
+      where: eq(projects.id, projectId),
+      limit: 1,
+      with: {
+        note: true,
+      },
+    });
 
-        if (!project) {
-          return res.status(404).json({ message: "Project not found" });
-        }
-        if (project.userId !== req.user!.id) {
-          return res.status(403).json({ message: "Not authorized" });
-        }
-        if (!project.recordingUrl) {
-          return res.status(400).json({ message: "No recording file associated with this project" });
-        }
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+    if (project.userId !== req.user!.id) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+    if (!project.recordingUrl) {
+      return res.status(400).json({ message: "No recording file associated with this project" });
+    }
 
-        const [user] = await db.query.users.findMany({
-          where: eq(users.id, req.user!.id),
-          limit: 1,
-        });
+    const [user] = await db.query.users.findMany({
+      where: eq(users.id, req.user!.id),
+      limit: 1,
+    });
 
-        if (!user.openaiApiKey) {
-          return res.status(400).json({ message: "OpenAI API key not set" });
-        }
+    if (!user.openaiApiKey) {
+      return res.status(400).json({ message: "OpenAI API key not set" });
+    }
 
-        const openai = new OpenAI({ apiKey: user.openaiApiKey });
-        const recordingPath = path.join(RECORDINGS_DIR, project.recordingUrl);
+    const openai = new OpenAI({ apiKey: user.openaiApiKey });
+    const recordingPath = path.join(RECORDINGS_DIR, project.recordingUrl);
 
-        try {
-          await fs.promises.access(recordingPath, constants.R_OK);
-        } catch (error) {
-          console.error("Recording file access error:", error);
-          return res.status(404).json({
-            message: "Recording file not found or not accessible",
-            details: error instanceof Error ? error.message : String(error),
-          });
-        }
+    try {
+      await fs.promises.access(recordingPath, constants.R_OK);
+    } catch (error) {
+      console.error("Recording file access error:", error);
+      return res.status(404).json({
+        message: "Recording file not found or not accessible",
+      });
+    }
 
-        // Convert to MP3 for Whisper
-        mp3FilePath = path.join(RECORDINGS_DIR, `temp_${Date.now()}.mp3`);
-        await new Promise<void>((resolve, reject) => {
-          const ffmpeg = spawn("ffmpeg", [
-            "-i", recordingPath,
-            "-vn",
-            "-acodec", "libmp3lame",
-            "-ab", "128k",
-            "-ar", "44100",
-            "-af", "silenceremove=1:0:-50dB",
-            "-y",
-            mp3FilePath,
-          ]);
+    // Convert to MP3 for Whisper
+    mp3FilePath = path.join(RECORDINGS_DIR, `temp_${Date.now()}.mp3`);
+    await new Promise<void>((resolve, reject) => {
+      const ffmpeg = spawn("ffmpeg", [
+        "-i", recordingPath,
+        "-vn",
+        "-acodec", "libmp3lame",
+        "-ab", "128k",
+        "-ar", "44100",
+        "-af", "silenceremove=1:0:-50dB",
+        "-y",
+        mp3FilePath,
+      ]);
 
-          ffmpeg.on("error", (error) => {
-            console.error("FFmpeg process error:", error);
-            reject(new Error(`FFmpeg process failed: ${error.message}`));
-          });
+      ffmpeg.on("error", (error) => {
+        console.error("FFmpeg process error:", error);
+        reject(new Error(`FFmpeg process failed: ${error.message}`));
+      });
 
-          ffmpeg.on("close", (code) => {
-            if (code === 0) resolve();
-            else reject(new Error(`FFmpeg process exited with code ${code}`));
-          });
-        });
+      ffmpeg.on("close", (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`FFmpeg process exited with code ${code}`));
+      });
+    });
 
-        // Get transcription
-        console.log("Starting Whisper transcription");
-        const transcriptionResponse = await openai.audio.transcriptions.create({
-          file: fs.createReadStream(mp3FilePath),
-          model: "whisper-1",
-        });
+    // Get transcription
+    console.log("Starting Whisper transcription");
+    const transcriptionResponse = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(mp3FilePath),
+      model: "whisper-1",
+    });
 
-        if (!transcriptionResponse.text) {
-          throw new Error("No transcription received from OpenAI");
-        }
+    if (!transcriptionResponse.text) {
+      throw new Error("No transcription received from OpenAI");
+    }
 
-        console.log("Transcription successful, length:", transcriptionResponse.text.length);
+    console.log("Transcription successful, length:", transcriptionResponse.text.length);
 
-        // Format transcript with timestamps
-        const formattingResponse = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content: `Format the transcript with only these elements:
+    // Format transcript with timestamps
+    const formattingResponse = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `Format the transcript with only these elements:
 
 1. Chapter Headers:
    - Identify key topic changes and sections
@@ -1072,545 +1049,545 @@ Format Rules:
 - Do not add intro or additional formatting
 - Add timestamps every 10-30 seconds
 - Preserve original text content exactly`,
+        },
+        {
+          role: "user",
+          content: transcriptionResponse.text,
+        },
+      ],
+      temperature: 0.3,
+      max_tokens: 2000,
+    });
+
+    if (!formattingResponse.choices[0]?.message?.content) {
+      throw new Error("No formatted transcript generated from OpenAI");
+    }
+
+    const formattedTranscript = formattingResponse.choices[0].message.content.trim();
+
+    // Generate title
+    const titleResponse = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: "Generate a clear, concise title (max 60 chars) based on the transcript content. Do not insert any additional formatting or punctuation",
+        },
+        {
+          role: "user",
+          content: formattedTranscript,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 60,
+    });
+
+    if (!titleResponse.choices[0]?.message?.content) {
+      throw new Error("No title generated from OpenAI");
+    }
+
+    const title = titleResponse.choices[0].message.content.trim();
+
+    // Generate summary
+    const [note] = await db.query.notes.findMany({
+      where: eq(notes.projectId, projectId),
+      limit: 1,
+    });
+
+    const summaryResponse = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: user.defaultPrompt || `Provide a clear and concise summary of the key points discussed in this recording. Focus on the main ideas, decisions, and important details.`,
+        },
+        {
+          role: "user",
+          content: `Note Context:\n${note?.content || "No note provided"}\n\nTranscript:\n${formattedTranscript}`,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 1000,
+    });
+
+    if (!summaryResponse.choices[0]?.message?.content) {
+      throw new Error("No summary generated from OpenAI");
+    }
+
+    const summary = summaryResponse.choices[0].message.content.trim();
+
+    // Task extraction with improved filtering
+    const aiResponse = await createChatCompletion({
+      userId: req.user!.id,
+      message: user.todoPrompt || "Please identify the tasks from this recording.",
+      context: {
+        transcription: formattedTranscript,
+        projectId, // Pass projectId to enable cleanup
+        summary,
+      },
+    });
+
+    // Process tasks with filtering
+    if (aiResponse.message && !isEmptyTaskResponse(aiResponse.message)) {
+      const tasks = aiResponse.message
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line && !isEmptyTaskResponse(line))
+        .map(task => ({
+          text: task,
+          projectId,
+          completed: false,
+          order: 0,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }));
+
+      if (tasks.length > 0) {
+        await db.insert(todos).values(tasks);
+      }
+    }
+
+    // Update project with all processed information
+    const [updatedProject] = await db.update(projects)
+      .set({
+        title,
+        transcription: formattedTranscript,
+        summary,
+        updatedAt: new Date(),
+      })
+      .where(eq(projects.id, projectId))
+      .returning();
+
+    // Final cleanup to catch any tasks that might have slipped through
+    await cleanupEmptyTasks(projectId);
+
+    res.json(updatedProject);
+
+  } catch (error) {
+    console.error("Processing error:", error);
+    res.status(500).json({
+      message: "Failed to process recording",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    // Cleanup temporary MP3 file
+    try {
+      if (mp3FilePath && fs.existsSync(mp3FilePath)) {
+        await fs.promises.unlink(mp3FilePath);
+        console.log("Cleaned up temporary MP3 file:", mp3FilePath);
+      }
+    } catch (cleanupError) {
+      console.error("Failed to clean up temporary MP3 file:", cleanupError);
+    }
+  }
+});
+
+app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const todoId = parseInt(req.params.id);
+      const { text, completed, columnId, order } = req.body;
+      console.log("Received todo update request:", {
+        todoId,
+        body: req.body,
+        userId: req.user?.id,
+      });
+      const [todo] = await db.query.todos.findMany({
+        where: eq(todos.id, todoId),
+        limit: 1,
+        with: {
+          project: {
+            columns: {
+              userId: true,
             },
-            {
-              role: "user",
-              content: transcriptionResponse.text,
-            },
-          ],
-          temperature: 0.3,
-          max_tokens: 2000,
+          },
+        },
+      });
+      console.log("Found todo:", todo);
+      if (!todo) {
+        console.log("Todo not found:", todoId);
+        return res.status(404).json({ message: "Todo not found" });
+      }
+      if (todo.project?.userId !== req.user!.id) {
+        console.log("Authorization failed:", {
+          todoUserId: todo.project?.userId,
+          requestUserId: req.user!.id,
         });
-
-        if (!formattingResponse.choices[0]?.message?.content) {
-          throw new Error("No formatted transcript generated from OpenAI");
+        return res.status(403).json({ message: "Notauthorized" });
+      }
+      const updateData: Partial<typeof todos.$inferInsert> = {
+        updatedAt: new Date(),
+      };
+      if (typeof text === "string" && text.trim()) {
+        console.log("Updating text to:", text.trim());
+        updateData.text = text.trim();
+      }
+      if (typeof completed === "boolean") {
+        updateData.completed = completed;
+      }
+      if (typeof columnId === "number") {
+        updateData.columnId = columnId;
+      }
+      if (typeof order === "number") {
+        updateData.order = order;
+      }
+      console.log("Applying updates:", updateData);
+      const [updatedTodo] = await db
+        .update(todos)
+        .set(updateData)
+        .where(eq(todos.id, todoId))
+        .returning();
+      console.log("Update result:", updatedTodo);
+      res.json(updatedTodo);
+    } catch (error: any) {
+      console.error("Error updating todo:", error);
+      res.status(500).json({
+        message: "Failed to update todo",
+        error: error.message,
+      });
+    }
+  });
+  app.patch(
+    "/api/projects/:projectId/todos/reorder",
+    requireAuth,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const projectId = parseInt(req.params.projectId);
+        const { todoIds } = req.body;
+        if (!Array.isArray(todoIds)) {
+          return res.status(400).json({ message: "Invalid todo IDs" });
         }
-
-        const formattedTranscript = formattingResponse.choices[0].message.content.trim();
-
-        // Generate title
-        const titleResponse = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content: "Generate a clear, concise title (max 60 chars) based on the transcript content. Do not insert any additional formatting or punctuation",
-            },
-            {
-              role: "user",
-              content: formattedTranscript,
-            },
-          ],
-          temperature: 0.7,
-          max_tokens: 60,
+        const [project] = await db.query.projects.findMany({
+          where: eq(projects.id, projectId),
+          limit: 1,
         });
-
-        if (!titleResponse.choices[0]?.message?.content) {
-          throw new Error("No title generated from OpenAI");
+        if (!project) {
+          return res.status(404).json({ message: "Project not found" });
         }
+        if (project.userId !== req.user!.id) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+        for (let i = 0; i < todoIds.length; i++) {
+          await db
+            .update(todos)
+            .set({
+              updatedAt: new Date(),
+            })
+            .where(eq(todos.id, todoIds[i]));
+        }
+        res.json({ message: "Todo order updated successfully" });
+      } catch (error: any) {
+        console.error("Error reordering todos:", error);
+        res.status(500).json({
+          message: "Failed to reorder todos",
+          error: error.message,
+        });
+      }
+    },
+  );
+  app.post("/api/logout", (req: AuthRequest, res: Response) => {
+      req.logout((err) => {
+        if (err) {
+          return res.status(500).send("Logout failed");
+        }
+        res.json({ message: "Logout successful" });
+      });
+    });
+  app.get("/api/user", (req: AuthRequest, res: Response) => {
+      if (req.isAuthenticated()) {
+        return res.json(req.user);
+      }
+      res.status(401).send("Not logged in");
+    });
+  app.post("/api/todos", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const { text, projectId } = req.body;
+      if (typeof text !== "string" || !text.trim()) {
+        return res.status(400).json({ message: "Invalid task text" });
+      }
 
-        const title = titleResponse.choices[0].message.content.trim();
-
-        // Generate summary
-        const [note] = await db.query.notes.findMany({
-          where: eq(notes.projectId, projectId),
+      // If no projectId is provided, find or create personal project
+      let effectiveProjectId = projectId;
+      if (!projectId) {
+        // Find personal project
+        const [personalProject] = await db.query.projects.findMany({
+          where: and(
+            eq(projects.userId, req.user!.id),
+            eq(projects.recordingUrl, 'personal.none')
+          ),
           limit: 1,
         });
 
-        const summaryResponse = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content: user.defaultPrompt || `Provide a clear and concise summary of the key points discussed in this recording. Focus on the main ideas, decisions, and important details.`,
-            },
-            {
-              role: "user",
-              content: `Note Context:\n${note?.content || "No note provided"}\n\nTranscript:\n${formattedTranscript}`,
-            },
-          ],
-          temperature: 0.7,
-          max_tokens: 1000,
-        });
-
-        if (!summaryResponse.choices[0]?.message?.content) {
-          throw new Error("No summary generated from OpenAI");
-        }
-
-        const summary = summaryResponse.choices[0].message.content.trim();
-
-        // Task extraction with improved filtering
-        const aiResponse = await createChatCompletion({
-          userId: req.user!.id,
-          message: user.todoPrompt || "Please identify the tasks from this recording.",
-          context: {
-            transcription: formattedTranscript,
-            projectId, // Pass projectId to enable cleanup
-            summary,
-          },
-        });
-
-        // Process tasks with filtering
-        if (aiResponse.message && !isEmptyTaskResponse(aiResponse.message)) {
-          const tasks = aiResponse.message
-            .split('\n')
-            .map(line => line.trim())
-            .filter(line => line && !isEmptyTaskResponse(line))
-            .map(task => ({
-              text: task,
-              projectId,
-              completed: false,
-              order: 0,
+        if (personalProject) {
+          effectiveProjectId = personalProject.id;
+        } else {
+          // Create personal project if it doesn't exist
+          const [newPersonalProject] = await db.insert(projects)
+            .values({
+              userId: req.user!.id,
+              title: 'Personal Tasks',
+              description: 'Your personal tasks',
+              recordingUrl: 'personal.none',
               createdAt: new Date(),
               updatedAt: new Date(),
-            }));
-
-          if (tasks.length > 0) {
-            await db.insert(todos).values(tasks);
-          }
+            })
+            .returning();
+          effectiveProjectId = newPersonalProject.id;
         }
+      }
 
-        // Update project with all processed information
-        const [updatedProject] = await db.update(projects)
+      const [todo] = await db.insert(todos)
+        .values({
+          text: text.trim(),
+          projectId: effectiveProjectId,
+          completed: false,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          order: 0,
+        })
+        .returning();
+
+      res.json(todo);
+    } catch (error: any) {
+      console.error("Error creating todo:", error);
+      res.status(500).json({
+        message: "Failed to create todo",
+        error: error.message,
+      });
+    }
+  });
+
+  app.delete("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const todoId = parseInt(req.params.id);
+        const [todo] = await db.query.todos.findMany({
+          where: eq(todos.id, todoId),
+          limit: 1,
+          with: {
+            project: true,
+          },
+        });
+        if (!todo) {
+          return res.status(404).json({ message: "Todo not found" });
+        }
+        if (todo.project?.userId !== req.user!.id) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+        console.log("Deleting todo:", {
+          id: todo.id,
+          text: todo.text,
+          projectId: todo.projectId,
+        });
+        const [deletedTodo] = await db
+          .delete(todos)
+          .where(eq(todos.id, todoId))
+          .returning();
+        if (!deletedTodo) {
+          throw new Error("Failed to delete todo");
+        }
+        res.json({ message: "Todo deleted successfully" });
+      } catch (error: any) {
+        console.error("Error deleting todo:", error);
+        res.status(500).json({
+          message: "Failed to delete todo",
+          error: error.message,
+        });
+      }
+    });
+  app.get("/api/todos", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const userTodos = await db
+          .select({
+            id: todos.id,
+            text: todos.text,
+            completed: todos.completed,
+            columnId: todos.columnId,
+            order: todos.order,
+            createdAt: todos.createdAt,
+            updatedAt: todos.updatedAt,
+            projectId: todos.projectId,
+            project: {
+              title: projects.title,
+            },
+          })
+          .from(todos)
+          .innerJoin(projects, eq(todos.projectId, projects.id))
+          .where(eq(projects.userId, req.user!.id))
+          .orderBy(desc(projects.createdAt));
+        res.json(userTodos);
+      } catch (error: any) {
+        console.error("Error fetching todos:", error);
+        res.status(500).json({
+          message: "Failed to fetch todos",
+          error: error.message,
+        });
+      }
+    });
+  app.get("/api/kanban/columns", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const columns = await db.query.kanbanColumns.findMany({
+          orderBy: (columns, { asc }) => [asc(columns.order)],
+          with: {
+            todos: {
+              orderBy: (todos, { asc }) => [asc(todos.order)],
+            },
+          },
+        });
+        res.json(columns);
+      } catch (error: any) {
+        console.error("Error fetching Kanban columns:", error);
+        res.status(500).json({
+          message: "Failed to fetch Kanban columns",
+          error: error.message,
+        });
+      }
+    });
+  app.post("/api/kanban/columns", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const { title } = req.body;
+        if (typeof title !== "string" || !title.trim()) {
+          return res.status(400).json({ message: "Invalid title" });
+        }
+        const columns = await db.query.kanbanColumns.findMany({
+          orderBy: (columns, { desc }) => [desc(columns.order)],
+          limit: 1,
+        });
+        const order = columns.length > 0 ? columns[0].order + 1 : 0;
+        const [column] = await db
+          .insert(kanbanColumns)
+          .values({
+            title: title.trim(),
+            order,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .returning();
+        res.json(column);
+      } catch (error: any) {
+        console.error("Error creating Kanban column:", error);
+        res.status(500).json({
+          message: "Failed to create Kanban column",
+          error: error.message,
+        });
+      }
+    });
+  app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const todoId = parseInt(req.params.id);
+        const { text, completed, columnId, order } = req.body;
+        const [todo] = await db.query.todos.findMany({
+          where: eq(todos.id, todoId),
+          limit: 1,
+          with: {
+            project: true,
+          },
+        });
+        if (!todo) {
+          return res.status(404).json({ message: "Todo not found" });
+        }
+        if (todo.project?.userId !== req.user!.id) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+        const updateData: Partial<typeof todos.$inferInsert> = {
+          updatedAt: new Date(),
+        };
+        if (typeof text === "string" && text.trim()) {
+          updateData.text = text.trim();
+        }
+        if (typeof completed === "boolean") {
+          updateData.completed = completed;
+        }
+        if (typeof columnId === "number") {
+          updateData.columnId = columnId;
+        }
+        if (typeof order === "number") {
+          updateData.order = order;
+        }
+        const [updatedTodo] = await db
+          .update(todos)
+          .set(updateData)
+          .where(eq(todos.id, todoId))
+          .returning();
+        if (!updatedTodo) {
+          throw new Error("Update operation failed");
+        }
+        res.json(updatedTodo);
+      } catch (error: any) {
+        console.error("Error updating todo:", error);
+        res.status(500).json({
+          message: "Failed to update todo",
+          error: error.message,
+        });
+      }
+    });
+  app.put("/api/projects/:id/summary", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const projectId = parseInt(req.params.id);
+        const { summary } = req.body;
+  
+        if (typeof summary !== "string") {
+          return res.status(400).json({ message: "Invalid summary content" });
+        }
+  
+        const [project] = await db.query.projects.findMany({
+          where: eq(projects.id, projectId),
+          limit: 1,
+        });
+  
+        if (!project) {
+          return res.status(404).json({ message: "Project not found" });
+        }
+  
+        if (project.userId !== req.user!.id) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+  
+        const [updatedProject] = await db
+          .update(projects)
           .set({
-            title,
-            transcription: formattedTranscript,
             summary,
             updatedAt: new Date(),
           })
           .where(eq(projects.id, projectId))
           .returning();
-
-        // Final cleanup to catch any tasks that might have slipped through
-        await cleanupEmptyTasks(projectId);
-
+  
         res.json(updatedProject);
-
-      } catch (error) {
-        console.error("Processing error:", error);
-        res.status(500).json({
-          message: "Failed to process recording",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        // Cleanup temporary MP3 file
-        try {
-          if (mp3FilePath && fs.existsSync(mp3FilePath)) {
-            await fs.promises.unlink(mp3FilePath);
-            console.log("Cleaned up temporary MP3 file:", mp3FilePath);
-          }
-        } catch (cleanupError) {
-          console.error("Failed to clean up temporary MP3 file:", cleanupError);
-        }
-      }
-    });
-
-    app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          const todoId = parseInt(req.params.id);
-          const { text, completed, columnId, order } = req.body;
-          console.log("Received todo update request:", {
-            todoId,
-            body: req.body,
-            userId: req.user?.id,
-          });
-          const [todo] = await db.query.todos.findMany({
-            where: eq(todos.id, todoId),
-            limit: 1,
-            with: {
-              project: {
-                columns: {
-                  userId: true,
-                },
-              },
-            },
-          });
-          console.log("Found todo:", todo);
-          if (!todo) {
-            console.log("Todo not found:", todoId);
-            return res.status(404).json({ message: "Todo not found" });
-          }
-          if (todo.project?.userId !== req.user!.id) {
-            console.log("Authorization failed:", {
-              todoUserId: todo.project?.userId,
-              requestUserId: req.user!.id,
-            });
-            return res.status(403).json({ message: "Notauthorized" });
-          }
-          const updateData: Partial<typeof todos.$inferInsert> = {
-            updatedAt: new Date(),
-          };
-          if (typeof text === "string" && text.trim()) {
-            console.log("Updating text to:", text.trim());
-            updateData.text = text.trim();
-          }
-          if (typeof completed === "boolean") {
-            updateData.completed = completed;
-          }
-          if (typeof columnId === "number") {
-            updateData.columnId = columnId;
-          }
-          if (typeof order === "number") {
-            updateData.order = order;
-          }
-          console.log("Applying updates:", updateData);
-          const [updatedTodo] = await db
-            .update(todos)
-            .set(updateData)
-            .where(eq(todos.id, todoId))
-            .returning();
-          console.log("Update result:", updatedTodo);
-          res.json(updatedTodo);
-        } catch (error: any) {
-          console.error("Error updating todo:", error);
-          res.status(500).json({
-            message: "Failed to update todo",
-            error: error.message,
-          });
-        }
-      });
-    app.patch(
-      "/api/projects/:projectId/todos/reorder",
-      requireAuth,
-      async (req: AuthRequest, res: Response) => {
-        try {
-          const projectId = parseInt(req.params.projectId);
-          const { todoIds } = req.body;
-          if (!Array.isArray(todoIds)) {
-            return res.status(400).json({ message: "Invalid todo IDs" });
-          }
-          const [project] = await db.query.projects.findMany({
-            where: eq(projects.id, projectId),
-            limit: 1,
-          });
-          if (!project) {
-            return res.status(404).json({ message: "Project not found" });
-          }
-          if (project.userId !== req.user!.id) {
-            return res.status(403).json({ message: "Not authorized" });
-          }
-          for (let i = 0; i < todoIds.length; i++) {
-            await db
-              .update(todos)
-              .set({
-                updatedAt: new Date(),
-              })
-              .where(eq(todos.id, todoIds[i]));
-          }
-          res.json({ message: "Todo order updated successfully" });
-        } catch (error: any) {
-          console.error("Error reordering todos:", error);
-          res.status(500).json({
-            message: "Failed to reorder todos",
-            error: error.message,
-          });
-        }
-      },
-    );
-    app.post("/api/logout", (req: AuthRequest, res: Response) => {
-        req.logout((err) => {
-          if (err) {
-            return res.status(500).send("Logout failed");
-          }
-          res.json({ message: "Logout successful" });
-        });
-      });
-    app.get("/api/user", (req: AuthRequest, res: Response) => {
-        if (req.isAuthenticated()) {
-          return res.json(req.user);
-        }
-        res.status(401).send("Not logged in");
-      });
-    app.post("/api/todos", requireAuth, async (req: AuthRequest, res: Response) => {
-      try {
-        const { text, projectId } = req.body;
-        if (typeof text !== "string" || !text.trim()) {
-          return res.status(400).json({ message: "Invalid task text" });
-        }
-
-        // If no projectId is provided, find or create personal project
-        let effectiveProjectId = projectId;
-        if (!projectId) {
-          // Find personal project
-          const [personalProject] = await db.query.projects.findMany({
-            where: and(
-              eq(projects.userId, req.user!.id),
-              eq(projects.recordingUrl, 'personal.none')
-            ),
-            limit: 1,
-          });
-
-          if (personalProject) {
-            effectiveProjectId = personalProject.id;
-          } else {
-            // Create personal project if it doesn't exist
-            const [newPersonalProject] = await db.insert(projects)
-              .values({
-                userId: req.user!.id,
-                title: 'Personal Tasks',
-                description: 'Your personal tasks',
-                recordingUrl: 'personal.none',
-                createdAt: new Date(),
-                updatedAt: new Date(),
-              })
-              .returning();
-            effectiveProjectId = newPersonalProject.id;
-          }
-        }
-
-        const [todo] = await db.insert(todos)
-          .values({
-            text: text.trim(),
-            projectId: effectiveProjectId,
-            completed: false,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            order: 0,
-          })
-          .returning();
-
-        res.json(todo);
       } catch (error: any) {
-        console.error("Error creating todo:", error);
+        console.error("Error updating project summary:", error);
         res.status(500).json({
-          message: "Failed to create todo",
+          message: "Failed to update project summary",
           error: error.message,
         });
       }
     });
-
-    app.delete("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          const todoId = parseInt(req.params.id);
-          const [todo] = await db.query.todos.findMany({
-            where: eq(todos.id, todoId),
-            limit: 1,
-            with: {
-              project: true,
-            },
-          });
-          if (!todo) {
-            return res.status(404).json({ message: "Todo not found" });
-          }
-          if (todo.project?.userId !== req.user!.id) {
-            return res.status(403).json({ message: "Not authorized" });
-          }
-          console.log("Deleting todo:", {
-            id: todo.id,
-            text: todo.text,
-            projectId: todo.projectId,
-          });
-          const [deletedTodo] = await db
-            .delete(todos)
-            .where(eq(todos.id, todoId))
-            .returning();
-          if (!deletedTodo) {
-            throw new Error("Failed to delete todo");
-          }
-          res.json({ message: "Todo deleted successfully" });
-        } catch (error: any) {
-          console.error("Error deleting todo:", error);
-          res.status(500).json({
-            message: "Failed to delete todo",
-            error: error.message,
-          });
+  app.get("/api/chats/:projectId?", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const projectId = req.params.projectId
+          ? parseInt(req.params.projectId)
+          : undefined;
+        const conditions = [eq(chats.userId, req.user!.id)];
+  
+        if (projectId) {
+          conditions.push(eq(chats.projectId, projectId));
         }
-      });
-    app.get("/api/todos", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          const userTodos = await db
-            .select({
-              id: todos.id,
-              text: todos.text,
-              completed: todos.completed,
-              columnId: todos.columnId,
-              order: todos.order,
-              createdAt: todos.createdAt,
-              updatedAt: todos.updatedAt,
-              projectId: todos.projectId,
-              project: {
-                title: projects.title,
-              },
-            })
-            .from(todos)
-            .innerJoin(projects, eq(todos.projectId, projects.id))
-            .where(eq(projects.userId, req.user!.id))
-            .orderBy(desc(projects.createdAt));
-          res.json(userTodos);
-        } catch (error: any) {
-          console.error("Error fetching todos:", error);
-          res.status(500).json({
-            message: "Failed to fetch todos",
-            error: error.message,
-          });
-        }
-      });
-    app.get("/api/kanban/columns", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          const columns = await db.query.kanbanColumns.findMany({
-            orderBy: (columns, { asc }) => [asc(columns.order)],
-            with: {
-              todos: {
-                orderBy: (todos, { asc }) => [asc(todos.order)],
-              },
-            },
-          });
-          res.json(columns);
-        } catch (error: any) {
-          console.error("Error fetching Kanban columns:", error);
-          res.status(500).json({
-            message: "Failed to fetch Kanban columns",
-            error: error.message,
-          });
-        }
-      });
-    app.post("/api/kanban/columns", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          const { title } = req.body;
-          if (typeof title !== "string" || !title.trim()) {
-            return res.status(400).json({ message: "Invalid title" });
-          }
-          const columns = await db.query.kanbanColumns.findMany({
-            orderBy: (columns, { desc }) => [desc(columns.order)],
-            limit: 1,
-          });
-          const order = columns.length > 0 ? columns[0].order + 1 : 0;
-          const [column] = await db
-            .insert(kanbanColumns)
-            .values({
-              title: title.trim(),
-              order,
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .returning();
-          res.json(column);
-        } catch (error: any) {
-          console.error("Error creating Kanban column:", error);
-          res.status(500).json({
-            message: "Failed to create Kanban column",
-            error: error.message,
-          });
-        }
-      });
-    app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          const todoId = parseInt(req.params.id);
-          const { text, completed, columnId, order } = req.body;
-          const [todo] = await db.query.todos.findMany({
-            where: eq(todos.id, todoId),
-            limit: 1,
-            with: {
-              project: true,
-            },
-          });
-          if (!todo) {
-            return res.status(404).json({ message: "Todo not found" });
-          }
-          if (todo.project?.userId !== req.user!.id) {
-            return res.status(403).json({ message: "Not authorized" });
-          }
-          const updateData: Partial<typeof todos.$inferInsert> = {
-            updatedAt: new Date(),
-          };
-          if (typeof text === "string" && text.trim()) {
-            updateData.text = text.trim();
-          }
-          if (typeof completed === "boolean") {
-            updateData.completed = completed;
-          }
-          if (typeof columnId === "number") {
-            updateData.columnId = columnId;
-          }
-          if (typeof order === "number") {
-            updateData.order = order;
-          }
-          const [updatedTodo] = await db
-            .update(todos)
-            .set(updateData)
-            .where(eq(todos.id, todoId))
-            .returning();
-          if (!updatedTodo) {
-            throw new Error("Update operation failed");
-          }
-          res.json(updatedTodo);
-        } catch (error: any) {
-          console.error("Error updating todo:", error);
-          res.status(500).json({
-            message: "Failed to update todo",
-            error: error.message,
-          });
-        }
-      });
-    app.put("/api/projects/:id/summary", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          const projectId = parseInt(req.params.id);
-          const { summary } = req.body;
-    
-          if (typeof summary !== "string") {
-            return res.status(400).json({ message: "Invalid summary content" });
-          }
-    
-          const [project] = await db.query.projects.findMany({
-            where: eq(projects.id, projectId),
-            limit: 1,
-          });
-    
-          if (!project) {
-            return res.status(404).json({ message: "Project not found" });
-          }
-    
-          if (project.userId !== req.user!.id) {
-            return res.status(403).json({ message: "Not authorized" });
-          }
-    
-          const [updatedProject] = await db
-            .update(projects)
-            .set({
-              summary,
-              updatedAt: new Date(),
-            })
-            .where(eq(projects.id, projectId))
-            .returning();
-    
-          res.json(updatedProject);
-        } catch (error: any) {
-          console.error("Error updating project summary:", error);
-          res.status(500).json({
-            message: "Failed to update project summary",
-            error: error.message,
-          });
-        }
-      });
-    app.get("/api/chats/:projectId?", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          const projectId = req.params.projectId
-            ? parseInt(req.params.projectId)
-            : undefined;
-          const conditions = [eq(chats.userId, req.user!.id)];
-    
-          if (projectId) {
-            conditions.push(eq(chats.projectId, projectId));
-          }
-    
-          const messages = await db.query.chats.findMany({
-            where: and(...conditions),
-            orderBy: asc(chats.timestamp),
-          });
-          res.json(messages);
-        } catch (error: any) {
-          console.error("Error fetching chats:", error);
-          res.status(500).json({
-            message: "Failed to fetch chats",
-            error: error.message,
-          });
-        }
-      });
-    return httpServer;
-  } catch (error) {
-    console.error("Error during route registration:", error);
-    throw error; // Let the main error handler deal with it
-  }
+  
+        const messages = await db.query.chats.findMany({
+          where: and(...conditions),
+          orderBy: asc(chats.timestamp),
+        });
+        res.json(messages);
+      } catch (error: any) {
+        console.error("Error fetching chats:", error);
+        res.status(500).json({
+          message: "Failed to fetch chats",
+          error: error.message,
+        });
+      }
+    });
+  return httpServer;
+} catch (error) {
+  console.error("Error during route registration:", error);
+  throw error; // Let the main error handler deal with it
+}
 }
 
 function getContentType(filename: string): string {
