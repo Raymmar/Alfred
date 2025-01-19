@@ -86,6 +86,57 @@ function isEmptyTaskResponse(text: string): boolean {
   return hasPhrase || matchesPattern;
 }
 
+// Add helper function to handle chunked files
+async function reassembleChunkedRecording(chunks: string[], isLastChunk: boolean, recordingsDir: string): Promise<string> {
+  if (!chunks || chunks.length === 0) {
+    throw new Error('No chunks provided for reassembly');
+  }
+
+  try {
+    // Generate final filename
+    const timestamp = Date.now();
+    const finalFilename = `recording-${timestamp}-complete.webm`;
+    const finalPath = path.join(recordingsDir, finalFilename);
+
+    // Create write stream for final file
+    const writeStream = fs.createWriteStream(finalPath);
+
+    // Process each chunk in order
+    for (const chunkFilename of chunks) {
+      const chunkPath = path.join(recordingsDir, chunkFilename);
+
+      // Check if chunk exists
+      if (!fs.existsSync(chunkPath)) {
+        throw new Error(`Chunk file not found: ${chunkFilename}`);
+      }
+
+      // Read chunk and append to final file
+      const chunkData = await fs.promises.readFile(chunkPath);
+      writeStream.write(chunkData);
+
+      // Clean up chunk file
+      if (isLastChunk) {
+        await fs.promises.unlink(chunkPath).catch(err => 
+          console.warn('Failed to cleanup chunk:', chunkFilename, err)
+        );
+      }
+    }
+
+    // Close the write stream
+    await new Promise((resolve, reject) => {
+      writeStream.end(err => {
+        if (err) reject(err);
+        else resolve(null);
+      });
+    });
+
+    return finalFilename;
+  } catch (error) {
+    console.error('Error reassembling chunks:', error);
+    throw error;
+  }
+}
+
 // Extend Express Request type to include auth properties
 interface AuthRequest extends Request {
   isAuthenticated(): boolean;
@@ -609,7 +660,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const form = formidable({
           uploadDir: recordingsDir,
           keepExtensions: true,
-          maxFileSize: 300 * 1024 * 1024, // 300MB max
+          maxFileSize: 300 * 1024 * 1024, // 300MB max for each chunk
           filter: ({ mimetype, originalFilename, size }) => {
             console.log('Filtering upload:', { mimetype, originalFilename, size });
 
@@ -630,12 +681,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
 
             return true;
-          },
-          filename: (_name, _ext, part) => {
-            const timestamp = Date.now();
-            const filename = `recording-${timestamp}.webm`;
-            console.log('Generated filename:', filename);
-            return filename;
           }
         });
 
@@ -662,6 +707,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
           type: file.mimetype
         });
 
+        // Get additional chunk information from the request
+        const isLastChunk = fields.isLastChunk?.[0] === 'true';
+        const previousChunks = fields.previousChunks?.[0] 
+          ? JSON.parse(fields.previousChunks[0] as string) 
+          : [];
+
+        // If this is part of a chunked upload
+        if (previousChunks.length > 0 || !isLastChunk) {
+          console.log('Processing chunked upload:', {
+            isLastChunk,
+            previousChunksCount: previousChunks.length
+          });
+
+          // Add current chunk to the list
+          const allChunks = [...previousChunks, file.newFilename];
+
+          // If this is the last chunk, reassemble all chunks
+          if (isLastChunk) {
+            try {
+              const finalFilename = await reassembleChunkedRecording(allChunks, true, recordingsDir);
+              console.log('Successfully reassembled chunks into:', finalFilename);
+              return res.json({ filename: finalFilename });
+            } catch (error) {
+              console.error('Failed to reassemble chunks:', error);
+              return res.status(500).json({
+                message: "Failed to reassemble recording chunks",
+                error: error instanceof Error ? error.message : String(error)
+              });
+            }
+          }
+
+          // If not the last chunk, just return the current filename
+          return res.json({ filename: file.newFilename });
+        }
+
+        // Single file upload (small recordings)
         if (file.size === 0) {
           console.error('Empty recording file received');
           await fs.promises.unlink(file.filepath).catch(err => 
@@ -673,56 +754,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
 
-        if (!file.newFilename) {
-          console.error('File save failed - no filename generated');
-          return res.status(500).json({ 
-            message: "Failed to save recording file",
-            details: "Internal error while saving the file"
-          });
-        }
+        // Set proper file permissions
+        await fs.promises.chmod(file.filepath, 0o666);
 
-        const filePath = join(recordingsDir, file.newFilename);
+        console.log('Successfully saved recording:', {
+          filename: file.newFilename,
+          size: file.size,
+          type: file.mimetype,
+          path: file.filepath
+        });
 
-        // Verify file was saved and has content
-        try {
-          const stats = await fs.promises.stat(filePath);
-          console.log('Saved file stats:', {
-            path: filePath,
-            size: stats.size,
-            mode: stats.mode.toString(8)
-          });
-
-          if (stats.size === 0) {
-            await fs.promises.unlink(filePath);
-            return res.status(400).json({
-              message: "Invalid recording",
-              details: "The saved recording file is empty"
-            });
-          }
-
-          // Set proper file permissions
-          await fs.promises.chmod(filePath, 0o666);
-
-          console.log('Successfully saved recording:', {
-            filename: file.newFilename,
-            size: stats.size,
-            type: file.mimetype,
-            path: filePath
-          });
-
-          return res.json({ filename: file.newFilename });
-
-        } catch (error) {
-          console.error('File validation failed:', error);
-          // Attempt cleanup
-          await fs.promises.unlink(filePath).catch(err => 
-            console.error('Failed to cleanup invalid file:', err)
-          );
-          return res.status(500).json({
-            message: "Failed to validate recording",
-            details: error instanceof Error ? error.message : "Unknown error"
-          });
-        }
+        return res.json({ filename: file.newFilename });
 
       } catch (error: any) {
         console.error('Error handling file upload:', error);
