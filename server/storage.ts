@@ -7,16 +7,11 @@ import { eq, and } from 'drizzle-orm';
 
 // Get absolute path for recordings directory with user isolation
 export function getRecordingsPath(userId?: number) {
-  // In production/staging, recordings are stored in the persistent .data directory
-  // In development, they're stored in the project root
-  const basePath = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging'
-    ? join(process.cwd(), '.data')
-    : join(process.cwd(), '.local-data');
-
-  // Create user-specific subdirectory if userId is provided
+  // Always use .data directory for consistency across environments
+  const basePath = join(process.cwd(), '.data');
   const recordingsPath = userId 
-    ? join(basePath, 'user-recordings', `user-${userId}`)
-    : join(basePath, 'audio-recordings');
+    ? join(basePath, 'recordings', `user-${userId}`)
+    : join(basePath, 'recordings');
 
   console.log('Resolved recordings path:', {
     basePath,
@@ -35,14 +30,14 @@ export async function ensureStorageDirectory(userId?: number) {
   try {
     console.log('Ensuring audio storage directory exists:', recordingsPath);
 
-    // Create all parent directories if needed
-    await mkdir(recordingsPath, { recursive: true });
+    // Create all parent directories if needed with more permissive permissions
+    await mkdir(recordingsPath, { recursive: true, mode: 0o777 });
 
-    // Set directory permissions to 755 (rwxr-xr-x)
-    await chmod(recordingsPath, 0o755);
+    // Set directory permissions to 777 for development environments
+    await chmod(recordingsPath, 0o777);
 
     // Verify directory is accessible
-    await access(recordingsPath, constants.R_OK | constants.W_OK);
+    await access(recordingsPath, fs.constants.R_OK | fs.constants.W_OK);
 
     // Create .gitignore in storage directory
     const gitignorePath = join(recordingsPath, '.gitignore');
@@ -86,42 +81,18 @@ export async function isValidAudioFile(filename: string, userId: number): Promis
       return [false, 'Invalid file extension'];
     }
 
-    // Check both old and new locations during transition
-    const newPath = getRecordingsPath(userId);
-    const oldPath = join(process.cwd(), 'recordings');
+    // Check in the recordings directory
+    const recordingsPath = getRecordingsPath();
+    const filePath = join(recordingsPath, filename);
 
-    const newFilePath = join(newPath, filename);
-    const oldFilePath = join(oldPath, filename);
-
-    console.log('Checking file locations:', {
-      newPath: newFilePath,
-      oldPath: oldFilePath,
-      exists: {
-        new: existsSync(newFilePath),
-        old: existsSync(oldFilePath)
-      },
+    console.log('Checking file location:', {
+      path: filePath,
+      exists: existsSync(filePath),
       timestamp: new Date().toISOString()
     });
 
-    // Try to access the file in both locations
-    let filePath: string | null = null;
-    if (existsSync(newFilePath)) {
-      filePath = newFilePath;
-    } else if (existsSync(oldFilePath)) {
-      // If file exists in old location, move it to new location
-      await ensureStorageDirectory(userId);
-      await fs.copyFile(oldFilePath, newFilePath);
-      await fs.unlink(oldFilePath);
-      filePath = newFilePath;
-      console.log('Moved file to new location:', {
-        from: oldFilePath,
-        to: newFilePath,
-        timestamp: new Date().toISOString()
-      });
-    }
-
-    if (!filePath) {
-      console.error('File not found in any location:', {
+    if (!existsSync(filePath)) {
+      console.error('File not found:', {
         filename,
         userId,
         timestamp: new Date().toISOString()
@@ -129,8 +100,8 @@ export async function isValidAudioFile(filename: string, userId: number): Promis
       return [false, 'File not found'];
     }
 
-    // Set proper file permissions (644 - rw-r--r--)
-    await chmod(filePath, 0o644);
+    // Set proper file permissions (666 - rw-rw-rw-)
+    await chmod(filePath, 0o666);
 
     // Verify the file is associated with the user
     const [project] = await db.query.projects.findMany({
