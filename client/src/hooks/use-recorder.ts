@@ -6,6 +6,9 @@ interface RecorderOptions {
   waveformRef?: HTMLDivElement | null;
 }
 
+const CHUNK_INTERVAL = 300000; // Save every 5 minutes
+const MAX_CHUNKS_IN_MEMORY = 3; // Keep only last 3 chunks in memory
+
 export function useRecorder() {
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
@@ -18,8 +21,15 @@ export function useRecorder() {
   const currentOptions = useRef<RecorderOptions | null>(null);
   const canvasContext = useRef<CanvasRenderingContext2D | null>(null);
   const canvas = useRef<HTMLCanvasElement | null>(null);
+  const chunkInterval = useRef<NodeJS.Timeout>();
+  const uploadedChunks = useRef<string[]>([]);
 
   const cleanup = useCallback((stopTracks = false) => {
+    if (chunkInterval.current) {
+      clearInterval(chunkInterval.current);
+      chunkInterval.current = undefined;
+    }
+
     if (animationFrame.current) {
       cancelAnimationFrame(animationFrame.current);
       animationFrame.current = undefined;
@@ -72,11 +82,67 @@ export function useRecorder() {
     analyser.current = null;
     dataArray.current = null;
     chunks.current = [];
+    uploadedChunks.current = [];
     setIsRecording(false);
   }, []);
 
+  const uploadChunk = async (audioBlob: Blob, isLastChunk = false): Promise<string> => {
+    const formData = new FormData();
+    const timestamp = Date.now();
+    const filename = `recording-${timestamp}-${isLastChunk ? 'final' : 'chunk'}.webm`;
+    formData.append('recording', audioBlob, filename);
+    formData.append('isLastChunk', String(isLastChunk));
+
+    if (uploadedChunks.current.length > 0) {
+      formData.append('previousChunks', JSON.stringify(uploadedChunks.current));
+    }
+
+    try {
+      const response = await fetch('/api/recordings/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to upload chunk');
+      }
+
+      const { filename: savedFilename } = await response.json();
+      uploadedChunks.current.push(savedFilename);
+      return savedFilename;
+    } catch (error) {
+      console.error('Error uploading chunk:', error);
+      throw error;
+    }
+  };
+
+  const saveCurrentChunk = async () => {
+    if (chunks.current.length === 0) return;
+
+    const currentBlob = new Blob(chunks.current, { type: 'audio/webm;codecs=opus' });
+    if (currentBlob.size === 0) return;
+
+    try {
+      await uploadChunk(currentBlob);
+      // Clear memory after successful upload
+      chunks.current = [];
+    } catch (error) {
+      console.error('Error saving chunk:', error);
+      throw error;
+    }
+  };
+
+  // Optimized visualization with memory management
   const setupVisualization = useCallback((container: HTMLDivElement) => {
     if (!container) return;
+
+    // Clean up existing canvas
+    if (canvas.current) {
+      const parent = canvas.current.parentNode;
+      if (parent) {
+        parent.removeChild(canvas.current);
+      }
+    }
 
     canvas.current = document.createElement('canvas');
     canvas.current.style.width = '100%';
@@ -97,6 +163,7 @@ export function useRecorder() {
     }
   }, []);
 
+  // Memory-efficient visualization
   const visualize = useCallback(() => {
     if (!analyser.current || !dataArray.current || !canvasContext.current || !canvas.current) {
       return;
@@ -115,11 +182,12 @@ export function useRecorder() {
         const barWidth = 2;
         const barGap = 1;
         const numBars = Math.floor(width / (barWidth + barGap));
+        const samplingRate = Math.ceil(dataArray.current.length / numBars);
 
         canvasContext.current.clearRect(0, 0, width, height);
 
         for (let i = 0; i < numBars; i++) {
-          const dataIndex = Math.floor((i / numBars) * dataArray.current.length);
+          const dataIndex = Math.floor(i * samplingRate);
           const value = dataArray.current[dataIndex];
           const percent = value / 255;
           const barHeight = (height * percent) * 0.9;
@@ -164,7 +232,6 @@ export function useRecorder() {
 
       mediaStream.current = audioStream;
 
-      // Set up audio context and analyzer after getting stream
       audioContext.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       const source = audioContext.current.createMediaStreamSource(audioStream);
       analyser.current = audioContext.current.createAnalyser();
@@ -173,22 +240,25 @@ export function useRecorder() {
 
       dataArray.current = new Uint8Array(analyser.current.frequencyBinCount);
 
-      // Create and configure MediaRecorder
       const recorder = new MediaRecorder(audioStream, {
         mimeType: 'audio/webm;codecs=opus',
         audioBitsPerSecond: 128000
       });
 
       chunks.current = [];
+      uploadedChunks.current = [];
 
-      // Handle incoming audio data
       recorder.ondataavailable = (event: BlobEvent) => {
         if (event.data.size > 0) {
           chunks.current.push(event.data);
+
+          // If chunks exceed threshold, trigger save
+          if (chunks.current.length > MAX_CHUNKS_IN_MEMORY) {
+            saveCurrentChunk().catch(console.error);
+          }
         }
       };
 
-      // Set up error handler
       recorder.onerror = (event: Event) => {
         console.error('MediaRecorder error:', event);
         cleanup(true);
@@ -196,12 +266,16 @@ export function useRecorder() {
         throw new Error('Recording failed: ' + (error.message || 'Unknown error'));
       };
 
-      // Set up visualization
       setupVisualization(waveformRef);
 
-      // Start recording
       mediaRecorder.current = recorder;
-      recorder.start(100); // Collect data every 100ms for smoother visualization
+      recorder.start(1000); // Collect data every second for more frequent chunks
+
+      // Set up periodic chunk saving
+      chunkInterval.current = setInterval(() => {
+        saveCurrentChunk().catch(console.error);
+      }, CHUNK_INTERVAL);
+
       setIsRecording(true);
       visualize();
 
@@ -228,33 +302,17 @@ export function useRecorder() {
 
       mediaRecorder.current.onstop = async () => {
         try {
-          if (chunks.current.length === 0) {
-            throw new Error('No audio data was recorded');
-          }
-
+          // Save any remaining chunks
           const finalBlob = new Blob(chunks.current, { 
             type: 'audio/webm;codecs=opus'
           });
 
-          if (finalBlob.size === 0) {
-            throw new Error('Recorded audio is empty');
+          if (finalBlob.size === 0 && uploadedChunks.current.length === 0) {
+            throw new Error('No audio data was recorded');
           }
 
-          const formData = new FormData();
-          const timestamp = Date.now();
-          const filename = `recording-${timestamp}.webm`;
-          formData.append('recording', finalBlob, filename);
-
-          const response = await fetch('/api/recordings/upload', {
-            method: 'POST',
-            body: formData,
-          });
-
-          if (!response.ok) {
-            throw new Error('Failed to upload recording to server');
-          }
-
-          const { filename: savedFilename } = await response.json();
+          // Upload final chunk with flag
+          const savedFilename = await uploadChunk(finalBlob, true);
 
           cleanup(true);
           resolve({ blob: finalBlob, filePath: savedFilename });
