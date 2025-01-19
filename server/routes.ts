@@ -610,10 +610,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
           uploadDir: recordingsDir,
           keepExtensions: true,
           maxFileSize: 300 * 1024 * 1024, // 300MB max
-          filter: ({ mimetype }) => {
-            const isAudio = mimetype?.includes('audio/') || false;
-            console.log('Filtering upload:', { mimetype, isAudio });
-            return isAudio;
+          filter: ({ mimetype, originalFilename, size }) => {
+            console.log('Filtering upload:', { mimetype, originalFilename, size });
+
+            // Accept both general audio and specific webm types
+            const isValidType = mimetype?.includes('audio/') || 
+                              mimetype === 'audio/webm' ||
+                              mimetype === 'audio/webm;codecs=opus';
+
+            if (!isValidType) {
+              console.warn('Invalid mime type:', mimetype);
+              return false;
+            }
+
+            // Basic size validation during filter
+            if (size === 0) {
+              console.warn('Empty file detected during filter');
+              return false;
+            }
+
+            return true;
           },
           filename: (_name, _ext, part) => {
             const timestamp = Date.now();
@@ -623,19 +639,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         });
 
+        console.log('Starting file upload processing');
         const [fields, files] = await form.parse(req);
-        const file = files.recording?.[0];
+        console.log('Form parse complete:', { 
+          fieldKeys: Object.keys(fields),
+          filesReceived: files ? Object.keys(files) : 'none'
+        });
 
+        const file = files.recording?.[0];
         if (!file) {
-          console.error('No recording file provided');
+          console.error('No recording file provided in request');
           return res.status(400).json({ 
             message: "No recording file provided",
             details: "The upload request must include a file named 'recording'"
           });
         }
 
+        console.log('Received file:', {
+          originalName: file.originalFilename,
+          newName: file.newFilename,
+          size: file.size,
+          type: file.mimetype
+        });
+
         if (file.size === 0) {
           console.error('Empty recording file received');
+          await fs.promises.unlink(file.filepath).catch(err => 
+            console.error('Failed to cleanup empty file:', err)
+          );
           return res.status(400).json({
             message: "Empty recording",
             details: "The uploaded recording file is empty"
@@ -652,34 +683,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const filePath = join(recordingsDir, file.newFilename);
 
-        // Verify file was saved
-        if (!existsSync(filePath)) {
-          console.error('File save verification failed:', filePath);
-          return res.status(500).json({ 
-            message: "Failed to verify recording file",
-            details: "The file could not be found after upload"
+        // Verify file was saved and has content
+        try {
+          const stats = await fs.promises.stat(filePath);
+          console.log('Saved file stats:', {
+            path: filePath,
+            size: stats.size,
+            mode: stats.mode.toString(8)
+          });
+
+          if (stats.size === 0) {
+            await fs.promises.unlink(filePath);
+            return res.status(400).json({
+              message: "Invalid recording",
+              details: "The saved recording file is empty"
+            });
+          }
+
+          // Set proper file permissions
+          await fs.promises.chmod(filePath, 0o666);
+
+          console.log('Successfully saved recording:', {
+            filename: file.newFilename,
+            size: stats.size,
+            type: file.mimetype,
+            path: filePath
+          });
+
+          return res.json({ filename: file.newFilename });
+
+        } catch (error) {
+          console.error('File validation failed:', error);
+          // Attempt cleanup
+          await fs.promises.unlink(filePath).catch(err => 
+            console.error('Failed to cleanup invalid file:', err)
+          );
+          return res.status(500).json({
+            message: "Failed to validate recording",
+            details: error instanceof Error ? error.message : "Unknown error"
           });
         }
 
-        // Set proper file permissions
-        await fs.promises.chmod(filePath, 0o666);
-
-        console.log('Successfully saved recording:', {
-          filename: file.newFilename,
-          size: file.size,
-          type: file.mimetype,
-          path: filePath
-        });
-
-        res.json({ filename: file.newFilename });
       } catch (error: any) {
         console.error('Error handling file upload:', error);
         res.status(500).json({
           message: "Failed to save recording",
-          error: error.message
+          error: error.message,
+          stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
       }
     });
+
     app.get("/api/projects", requireAuth, async (req: AuthRequest, res: Response) => {
         const userProjects = await db.query.projects.findMany({
           where: eq(projects.userId, req.user!.id),
