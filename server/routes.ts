@@ -1252,7 +1252,14 @@ Format Rules:
           const tasks = aiResponse.message
             .split('\n')
             .map(line => line.trim())
-            .filter(line => line && !isEmptyTaskResponse(line))
+            .filter(line => {
+              // Only filter out empty lines and invalid task responses
+              if (!line || isEmptyTaskResponse(line)) {
+                console.log('Filtering out empty or invalid task:', line);
+                return false;
+              }
+              return true;
+            })
             .map(task => ({
               text: task,
               projectId,
@@ -1263,8 +1270,13 @@ Format Rules:
             }));
 
           if (tasks.length > 0) {
+            console.log('Creating tasks:', tasks);
             await db.insert(todos).values(tasks);
+          } else {
+            console.log('No valid tasks extracted from the response');
           }
+        } else {
+          console.log('No tasks to process - empty or invalid response');
         }
 
         // Update project with all processed information
