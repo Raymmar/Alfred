@@ -8,9 +8,11 @@ interface RecorderOptions {
 
 const CHUNK_INTERVAL = 300000; // Save every 5 minutes
 const MAX_CHUNKS_IN_MEMORY = 3; // Keep only last 3 chunks in memory
+const MEMORY_CHECK_INTERVAL = 60000; // Check memory usage every minute
 
 export function useRecorder() {
   const [isRecording, setIsRecording] = useState(false);
+  const [memoryWarning, setMemoryWarning] = useState(false);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const mediaStream = useRef<MediaStream | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
@@ -22,12 +24,35 @@ export function useRecorder() {
   const canvasContext = useRef<CanvasRenderingContext2D | null>(null);
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const chunkInterval = useRef<NodeJS.Timeout>();
+  const memoryCheckInterval = useRef<NodeJS.Timeout>();
   const uploadedChunks = useRef<string[]>([]);
+
+  // Monitor memory usage
+  const checkMemoryUsage = useCallback(() => {
+    if ('memory' in performance) {
+      const memory = (performance as any).memory;
+      const usageRatio = memory.usedJSHeapSize / memory.jsHeapSizeLimit;
+
+      // Warn if memory usage is above 70%
+      if (usageRatio > 0.7) {
+        setMemoryWarning(true);
+        // Force chunk save to free up memory
+        saveCurrentChunk().catch(console.error);
+      } else {
+        setMemoryWarning(false);
+      }
+    }
+  }, []);
 
   const cleanup = useCallback((stopTracks = false) => {
     if (chunkInterval.current) {
       clearInterval(chunkInterval.current);
       chunkInterval.current = undefined;
+    }
+
+    if (memoryCheckInterval.current) {
+      clearInterval(memoryCheckInterval.current);
+      memoryCheckInterval.current = undefined;
     }
 
     if (animationFrame.current) {
@@ -84,36 +109,43 @@ export function useRecorder() {
     chunks.current = [];
     uploadedChunks.current = [];
     setIsRecording(false);
+    setMemoryWarning(false);
   }, []);
 
   const uploadChunk = async (audioBlob: Blob, isLastChunk = false): Promise<string> => {
-    const formData = new FormData();
-    const timestamp = Date.now();
-    const filename = `recording-${timestamp}-${isLastChunk ? 'final' : 'chunk'}.webm`;
-    formData.append('recording', audioBlob, filename);
-    formData.append('isLastChunk', String(isLastChunk));
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        const formData = new FormData();
+        const timestamp = Date.now();
+        const filename = `recording-${timestamp}-${isLastChunk ? 'final' : 'chunk'}.webm`;
+        formData.append('recording', audioBlob, filename);
+        formData.append('isLastChunk', String(isLastChunk));
 
-    if (uploadedChunks.current.length > 0) {
-      formData.append('previousChunks', JSON.stringify(uploadedChunks.current));
-    }
+        if (uploadedChunks.current.length > 0) {
+          formData.append('previousChunks', JSON.stringify(uploadedChunks.current));
+        }
 
-    try {
-      const response = await fetch('/api/recordings/upload', {
-        method: 'POST',
-        body: formData,
-      });
+        const response = await fetch('/api/recordings/upload', {
+          method: 'POST',
+          body: formData,
+        });
 
-      if (!response.ok) {
-        throw new Error('Failed to upload chunk');
+        if (!response.ok) {
+          throw new Error('Failed to upload chunk');
+        }
+
+        const { filename: savedFilename } = await response.json();
+        uploadedChunks.current.push(savedFilename);
+        return savedFilename;
+      } catch (error) {
+        console.error('Error uploading chunk:', error);
+        retries--;
+        if (retries === 0) throw error;
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait before retry
       }
-
-      const { filename: savedFilename } = await response.json();
-      uploadedChunks.current.push(savedFilename);
-      return savedFilename;
-    } catch (error) {
-      console.error('Error uploading chunk:', error);
-      throw error;
     }
+    throw new Error('Failed to upload chunk after retries');
   };
 
   const saveCurrentChunk = async () => {
@@ -276,6 +308,9 @@ export function useRecorder() {
         saveCurrentChunk().catch(console.error);
       }, CHUNK_INTERVAL);
 
+      // Set up memory monitoring
+      memoryCheckInterval.current = setInterval(checkMemoryUsage, MEMORY_CHECK_INTERVAL);
+
       setIsRecording(true);
       visualize();
 
@@ -335,6 +370,7 @@ export function useRecorder() {
 
   return {
     isRecording,
+    memoryWarning,
     startRecording,
     stopRecording,
   };
