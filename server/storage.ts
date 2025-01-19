@@ -5,11 +5,13 @@ import { db } from '@db';
 import { projects, type SelectUser } from '@db/schema';
 import { eq, and } from 'drizzle-orm';
 
+const VALID_EXTENSIONS = ['.webm', '.mp3', '.wav', '.ogg'];
+
 // Get absolute path for recordings directory with user isolation
 export function getRecordingsPath(userId?: number) {
   // Always use .data directory for consistency across environments
   const basePath = join(process.cwd(), '.data');
-  const recordingsPath = userId 
+  const recordingsPath = userId
     ? join(basePath, 'recordings', `user-${userId}`)
     : join(basePath, 'recordings');
 
@@ -30,20 +32,23 @@ export async function ensureStorageDirectory(userId?: number) {
   try {
     console.log('Ensuring audio storage directory exists:', recordingsPath);
 
-    // Create all parent directories if needed with more permissive permissions
+    // Create directory with permissive permissions
     await mkdir(recordingsPath, { recursive: true, mode: 0o777 });
 
-    // Set directory permissions to 777 for development environments
+    // Ensure directory has proper permissions
     await chmod(recordingsPath, 0o777);
 
     // Verify directory is accessible
-    await access(recordingsPath, fs.constants.R_OK | fs.constants.W_OK);
+    await access(recordingsPath, constants.R_OK | constants.W_OK);
 
     // Create .gitignore in storage directory
     const gitignorePath = join(recordingsPath, '.gitignore');
     if (!existsSync(gitignorePath)) {
-      await fs.writeFile(gitignorePath, `*\n!.gitignore`);
+      await fs.writeFile(gitignorePath, '*\n!.gitignore');
     }
+
+    // Set proper permissions on .gitignore
+    await chmod(gitignorePath, 0o666);
 
     // Log directory configuration
     const stats = await fs.stat(recordingsPath);
@@ -68,10 +73,10 @@ export async function ensureStorageDirectory(userId?: number) {
 // Enhanced file validation with better error handling
 export async function isValidAudioFile(filename: string, userId: number): Promise<[boolean, string]> {
   try {
-    const validExtensions = ['.webm', '.mp3', '.wav', '.ogg'];
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
 
-    if (!validExtensions.includes(ext)) {
+    // Basic extension validation
+    if (!VALID_EXTENSIONS.includes(ext)) {
       console.warn('Invalid audio file extension:', {
         filename,
         extension: ext,
@@ -81,47 +86,37 @@ export async function isValidAudioFile(filename: string, userId: number): Promis
       return [false, 'Invalid file extension'];
     }
 
-    // Check in the recordings directory
+    // Check if file exists
     const recordingsPath = getRecordingsPath();
     const filePath = join(recordingsPath, filename);
-
-    console.log('Checking file location:', {
-      path: filePath,
-      exists: existsSync(filePath),
-      timestamp: new Date().toISOString()
-    });
 
     if (!existsSync(filePath)) {
       console.error('File not found:', {
         filename,
+        path: filePath,
         userId,
         timestamp: new Date().toISOString()
       });
       return [false, 'File not found'];
     }
 
-    // Set proper file permissions (666 - rw-rw-rw-)
-    await chmod(filePath, 0o666);
+    // Get file stats and check permissions
+    try {
+      await access(filePath, constants.R_OK);
 
-    // Verify the file is associated with the user
-    const [project] = await db.query.projects.findMany({
-      where: and(
-        eq(projects.userId, userId),
-        eq(projects.recordingUrl, filename)
-      ),
-      limit: 1,
-    });
+      // Ensure file has proper permissions (666 - rw-rw-rw-)
+      await chmod(filePath, 0o666);
 
-    if (!project) {
-      console.warn('Unauthorized file access attempt:', {
+      return [true, ''];
+    } catch (error) {
+      console.error('File access error:', {
         filename,
         userId,
+        error: error instanceof Error ? error.message : String(error),
         timestamp: new Date().toISOString()
       });
-      return [false, 'Unauthorized access'];
+      return [false, 'File access denied'];
     }
-
-    return [true, ''];
   } catch (error) {
     console.error('Audio file validation error:', {
       filename,
