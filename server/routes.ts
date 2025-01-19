@@ -14,8 +14,8 @@ import { desc, eq, and, asc } from "drizzle-orm";
 import formidable from "formidable";
 import { spawn } from "child_process";
 import express from "express";
-import path from "path";
-import fs from "fs";
+import path, { join } from "path";
+import fs, { existsSync } from "fs";
 import { ensureStorageDirectory, getRecordingsPath, cleanupOrphanedRecordings, getAudioContentType, isValidAudioFile } from "./storage";
 import { createChatCompletion } from "./lib/openai";
 import { RequestHandler } from "express-serve-static-core";
@@ -116,8 +116,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   try {
     // Ensure recordings directory exists
-    await ensureStorageDirectory();
-    const RECORDINGS_DIR = getRecordingsPath();
+    const RECORDINGS_DIR = await ensureStorageDirectory();
 
     console.log("Using recordings directory:", RECORDINGS_DIR);
 
@@ -494,7 +493,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const webmPath = path.join(RECORDINGS_DIR, filename);
     
           try {
-            await fs.promises.access(webmPath, constants.R_OK);
+            await fs.promises.access(webmPath, fs.constants.R_OK);
           } catch (error) {
             return res.status(404).json({ message: "Recording not found" });
           }
@@ -602,61 +601,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
       },
     );
     app.post("/api/recordings/upload", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          if (!fs.existsSync(RECORDINGS_DIR)) {
-            fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+      try {
+        // Ensure storage directory exists with proper permissions
+        const recordingsDir = await ensureStorageDirectory();
+        console.log('Storage directory ready:', recordingsDir);
+
+        const form = formidable({
+          uploadDir: recordingsDir,
+          keepExtensions: true,
+          maxFileSize: 300 * 1024 * 1024, // 300MB max
+          filter: ({ mimetype }) => {
+            const isAudio = mimetype?.includes('audio/') || false;
+            console.log('Filtering upload:', { mimetype, isAudio });
+            return isAudio;
+          },
+          filename: (_name, _ext, part) => {
+            const timestamp = Date.now();
+            const filename = `recording-${timestamp}.webm`;
+            console.log('Generated filename:', filename);
+            return filename;
           }
-    
-          const form = formidable({
-            uploadDir: RECORDINGS_DIR,
-            keepExtensions: true,
-            maxFileSize: 300 * 1024 * 1024,
-            filter: ({ mimetype }) => {
-              return mimetype?.includes("audio/") || false;
-            },
-            filename: (_name, _ext, part) => {
-              const timestamp = Date.now();
-              return `recording-${timestamp}.webm`;
-            },
-          });
-    
-          const [fields, files] = await form.parse(req);
-          const file = files.recording?.[0];
-    
-          if (!file) {
-            return res.status(400).json({ message: "No recording file provided" });
-          }
-    
-          if (!file.newFilename) {
-            return res
-              .status(500)
-              .json({ message: "Failed to save recording file" });
-          }
-    
-          const filePath = path.join(RECORDINGS_DIR, file.newFilename);
-          if (!fs.existsSync(filePath)) {
-            return res
-              .status(500)
-              .json({ message: "Failed to verify recording file" });
-          }
-    
-          fs.chmodSync(filePath, 0o644);
-    
-          console.log("Successfully saved recording:", {
-            filename: file.newFilename,
-            size: file.size,
-            type: file.mimetype,
-          });
-    
-          res.json({ filename: file.newFilename });
-        } catch (error: any) {
-          console.error("Error handling file upload:", error);
-          res.status(500).json({
-            message: "Failed to save recording",
-            error: error.message,
+        });
+
+        const [fields, files] = await form.parse(req);
+        const file = files.recording?.[0];
+
+        if (!file) {
+          console.error('No recording file provided');
+          return res.status(400).json({ 
+            message: "No recording file provided",
+            details: "The upload request must include a file named 'recording'"
           });
         }
-      });
+
+        if (file.size === 0) {
+          console.error('Empty recording file received');
+          return res.status(400).json({
+            message: "Empty recording",
+            details: "The uploaded recording file is empty"
+          });
+        }
+
+        if (!file.newFilename) {
+          console.error('File save failed - no filename generated');
+          return res.status(500).json({ 
+            message: "Failed to save recording file",
+            details: "Internal error while saving the file"
+          });
+        }
+
+        const filePath = join(recordingsDir, file.newFilename);
+
+        // Verify file was saved
+        if (!existsSync(filePath)) {
+          console.error('File save verification failed:', filePath);
+          return res.status(500).json({ 
+            message: "Failed to verify recording file",
+            details: "The file could not be found after upload"
+          });
+        }
+
+        // Set proper file permissions
+        await fs.promises.chmod(filePath, 0o666);
+
+        console.log('Successfully saved recording:', {
+          filename: file.newFilename,
+          size: file.size,
+          type: file.mimetype,
+          path: filePath
+        });
+
+        res.json({ filename: file.newFilename });
+      } catch (error: any) {
+        console.error('Error handling file upload:', error);
+        res.status(500).json({
+          message: "Failed to save recording",
+          error: error.message
+        });
+      }
+    });
     app.get("/api/projects", requireAuth, async (req: AuthRequest, res: Response) => {
         const userProjects = await db.query.projects.findMany({
           where: eq(projects.userId, req.user!.id),
@@ -872,7 +895,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (project.recordingUrl) {
             const recordingPath = path.join(RECORDINGS_DIR, project.recordingUrl);
             try {
-              await fs.promises.access(recordingPath, constants.F_OK);
+              await fs.promises.access(recordingPath, fs.constants.F_OK);
               await fs.promises.unlink(recordingPath);
               console.log("Deleted recording file:", recordingPath);
               const mp4Path = path.join(
@@ -880,7 +903,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 `temp_${project.recordingUrl.replace(".webm", ".mp4")}`,
               );
               try {
-                await fs.promises.access(mp4Path, constants.F_OK);
+                await fs.promises.access(mp4Path, fs.constants.F_OK);
                 await fs.promises.unlink(mp4Path);
                 console.log("Deleted converted MP4 file:", mp4Path);
               } catch (error) {}
@@ -977,7 +1000,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const recordingPath = path.join(RECORDINGS_DIR, project.recordingUrl);
 
     try {
-      await fs.promises.access(recordingPath, constants.R_OK);
+      await fs.promises.access(recordingPath, fs.constants.R_OK);
     } catch (error) {
       console.error("Recording file access error:", error);
       return res.status(404).json({

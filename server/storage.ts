@@ -1,27 +1,20 @@
-import { mkdir, access, constants, chmod } from 'fs/promises';
+import { mkdir, access, constants } from 'fs/promises';
 import { existsSync, promises as fs } from 'fs';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { db } from '@db';
-import { projects, type SelectUser } from '@db/schema';
+import { projects } from '@db/schema';
 import { eq, and } from 'drizzle-orm';
 
 const VALID_EXTENSIONS = ['.webm', '.mp3', '.wav', '.ogg'];
+const DEFAULT_PERMISSIONS = 0o666; // rw-rw-rw-
+const DEFAULT_DIR_PERMISSIONS = 0o777; // rwxrwxrwx
 
 // Get absolute path for recordings directory with user isolation
 export function getRecordingsPath(userId?: number) {
-  // Always use .data directory for consistency across environments
   const basePath = join(process.cwd(), '.data');
-  const recordingsPath = userId
+  const recordingsPath = userId 
     ? join(basePath, 'recordings', `user-${userId}`)
     : join(basePath, 'recordings');
-
-  console.log('Resolved recordings path:', {
-    basePath,
-    recordingsPath,
-    userId,
-    env: process.env.NODE_ENV,
-    timestamp: new Date().toISOString()
-  });
 
   return recordingsPath;
 }
@@ -33,29 +26,24 @@ export async function ensureStorageDirectory(userId?: number) {
     console.log('Ensuring audio storage directory exists:', recordingsPath);
 
     // Create directory with permissive permissions
-    await mkdir(recordingsPath, { recursive: true, mode: 0o777 });
+    await mkdir(recordingsPath, { recursive: true, mode: DEFAULT_DIR_PERMISSIONS });
 
-    // Ensure directory has proper permissions
-    await chmod(recordingsPath, 0o777);
+    // Double-check directory permissions after creation
+    await fs.chmod(recordingsPath, DEFAULT_DIR_PERMISSIONS);
+
+    // Create .gitignore if it doesn't exist
+    const gitignorePath = join(recordingsPath, '.gitignore');
+    if (!existsSync(gitignorePath)) {
+      await fs.writeFile(gitignorePath, '*\n!.gitignore');
+      await fs.chmod(gitignorePath, DEFAULT_PERMISSIONS);
+    }
 
     // Verify directory is accessible
     await access(recordingsPath, constants.R_OK | constants.W_OK);
 
-    // Create .gitignore in storage directory
-    const gitignorePath = join(recordingsPath, '.gitignore');
-    if (!existsSync(gitignorePath)) {
-      await fs.writeFile(gitignorePath, '*\n!.gitignore');
-    }
-
-    // Set proper permissions on .gitignore
-    await chmod(gitignorePath, 0o666);
-
-    // Log directory configuration
-    const stats = await fs.stat(recordingsPath);
     console.log('Storage directory configured:', {
       path: recordingsPath,
       exists: existsSync(recordingsPath),
-      mode: stats.mode.toString(8),
       timestamp: new Date().toISOString()
     });
 
@@ -70,43 +58,45 @@ export async function ensureStorageDirectory(userId?: number) {
   }
 }
 
-// Enhanced file validation with better error handling
+// Get content type for response headers
+export function getAudioContentType(filename: string): string {
+  const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
+  const mimeTypes: Record<string, string> = {
+    '.webm': 'audio/webm',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.ogg': 'audio/ogg'
+  };
+  return mimeTypes[ext] || 'application/octet-stream';
+}
+
+// Validate audio file with enhanced error handling
 export async function isValidAudioFile(filename: string, userId: number): Promise<[boolean, string]> {
   try {
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
 
     // Basic extension validation
     if (!VALID_EXTENSIONS.includes(ext)) {
-      console.warn('Invalid audio file extension:', {
-        filename,
-        extension: ext,
-        userId,
-        timestamp: new Date().toISOString()
-      });
       return [false, 'Invalid file extension'];
     }
 
-    // Check if file exists
-    const recordingsPath = getRecordingsPath();
-    const filePath = join(recordingsPath, filename);
+    const filePath = join(getRecordingsPath(), filename);
 
+    // Check if file exists
     if (!existsSync(filePath)) {
-      console.error('File not found:', {
-        filename,
-        path: filePath,
-        userId,
-        timestamp: new Date().toISOString()
-      });
       return [false, 'File not found'];
     }
 
-    // Get file stats and check permissions
+    // Get file stats and verify size
+    const stats = await fs.stat(filePath);
+    if (stats.size === 0) {
+      return [false, 'File is empty'];
+    }
+
+    // Verify file is readable
     try {
       await access(filePath, constants.R_OK);
-
-      // Ensure file has proper permissions (666 - rw-rw-rw-)
-      await chmod(filePath, 0o666);
-
+      await fs.chmod(filePath, DEFAULT_PERMISSIONS);
       return [true, ''];
     } catch (error) {
       console.error('File access error:', {
@@ -128,30 +118,12 @@ export async function isValidAudioFile(filename: string, userId: number): Promis
   }
 }
 
-// Add helper for getting content type
-export const getAudioContentType = (filename: string): string => {
-  const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
-  const mimeTypes: Record<string, string> = {
-    '.webm': 'audio/webm',
-    '.mp3': 'audio/mpeg',
-    '.wav': 'audio/wav',
-    '.ogg': 'audio/ogg'
-  };
-  return mimeTypes[ext] || 'application/octet-stream';
-};
-
+// Cleanup orphaned recordings
 export async function cleanupOrphanedRecordings(userId?: number) {
   const recordingsPath = getRecordingsPath(userId);
 
   try {
-    console.log('Starting cleanup of orphaned recordings:', {
-      directory: recordingsPath,
-      userId,
-      timestamp: new Date().toISOString()
-    });
-
     if (!existsSync(recordingsPath)) {
-      console.log('No recordings directory found to clean:', recordingsPath);
       return;
     }
 
@@ -173,17 +145,11 @@ export async function cleanupOrphanedRecordings(userId?: number) {
         const filePath = join(recordingsPath, file);
         try {
           await fs.unlink(filePath);
-          console.log('Deleted orphaned recording:', {
-            filePath,
-            userId,
-            timestamp: new Date().toISOString()
-          });
+          console.log('Deleted orphaned recording:', filePath);
         } catch (error) {
           console.error('Failed to delete orphaned recording:', {
             filePath,
-            userId,
-            error: error instanceof Error ? error.message : String(error),
-            timestamp: new Date().toISOString()
+            error: error instanceof Error ? error.message : String(error)
           });
         }
       }
@@ -191,9 +157,7 @@ export async function cleanupOrphanedRecordings(userId?: number) {
   } catch (error) {
     console.error('Error during recordings cleanup:', {
       directory: recordingsPath,
-      userId,
-      error: error instanceof Error ? error.stack : String(error),
-      timestamp: new Date().toISOString()
+      error: error instanceof Error ? error.stack : String(error)
     });
   }
 }
