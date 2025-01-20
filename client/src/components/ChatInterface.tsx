@@ -155,7 +155,7 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
                 className={cn(
                   "prose prose-sm dark:prose-invert max-w-none break-words",
                   message.role === "user" 
-                    ? "prose-headings:text-primary-foreground prose-p:text-primary-foreground prose-strong:text-primary-foreground prose-code:text-primary-foreground prose-a:text-primary-foreground prose-ul:text-primary-foreground prose-ol:text-primary-foreground prose-li:text-primary-foreground"
+                    ? "text-primary-foreground prose-p:text-primary-foreground prose-headings:text-primary-foreground prose-strong:text-primary-foreground prose-code:text-primary-foreground prose-a:text-primary-foreground prose-ul:text-primary-foreground prose-ol:text-primary-foreground prose-li:text-primary-foreground"
                     : "prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-code:text-muted-foreground prose-a:text-foreground prose-ul:text-foreground prose-ol:text-foreground prose-li:text-foreground"
                 )}
                 dangerouslySetInnerHTML={{ __html: message.content }}
