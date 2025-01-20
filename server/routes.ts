@@ -533,6 +533,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             context: {
               transcription: project.transcription,
               summary: project.summary,
+              notes: project.notes,
             },
           });
 
