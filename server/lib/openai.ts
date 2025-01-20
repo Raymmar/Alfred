@@ -3,10 +3,6 @@ import { db } from "@db";
 import { eq, and } from "drizzle-orm";
 import { settings, users, projects, todos, chats } from "@db/schema";
 import { updateChatContext, createEmbedding } from './embeddings';
-import { findRecommendedTasks } from './embeddings';
-
-// the newest OpenAI model is "gpt-4o" which was released May 13, 2024
-const CHAT_MODEL = "gpt-4o";
 
 // Task filtering functions - used by routes.ts only
 export function isEmptyTaskResponse(text: string): boolean {
@@ -200,6 +196,7 @@ export async function createChatCompletion({
     throw new Error("User not found");
   }
 
+  // Get user settings including processing prompts
   const userSettings = await db.query.settings.findFirst({
     where: eq(settings.userId, userId),
   });
@@ -213,7 +210,7 @@ export async function createChatCompletion({
     apiKey,
   });
 
-  // Get only the relevant project data if we have a project context
+  // Get project data for context
   let projectData = null;
   if (context?.projectId) {
     const project = await db.query.projects.findFirst({
@@ -233,40 +230,58 @@ export async function createChatCompletion({
         transcription: project.transcription,
         summary: project.summary,
         note: project.note?.content,
+        // Analyze note format to guide response formatting
+        noteFormat: project.note?.content ? {
+          hasBullets: project.note.content.includes('•') || project.note.content.includes('-'),
+          hasNumbering: /^\d+\./.test(project.note.content),
+          hasHeadings: /^#+\s/.test(project.note.content) || /^[A-Z].*:\n/.test(project.note.content),
+          paragraphStyle: project.note.content.includes('\n\n') ? 'double-spaced' : 'single-spaced'
+        } : null
       };
     }
   }
 
-  // Use user's custom prompt or fall back to default
-  const customPrompt = userSettings?.defaultPrompt?.trim() || user.defaultPrompt?.trim();
+  // Get user's custom processing prompt
+  const processingPrompt = userSettings?.defaultPrompt?.trim() || user.defaultPrompt?.trim();
 
-  // Build a focused system message that emphasizes note enhancement
-  let systemMessage = customPrompt || `You are an AI assistant focused on enhancing user notes with relevant context from meeting transcriptions. When provided with a user's note and a transcript:
+  // Build a focused system message that emphasizes note enhancement and format matching
+  let systemMessage = processingPrompt || `You are an AI assistant focused on enhancing user notes with relevant context from meeting transcriptions. Your primary goal is to maintain consistency with the user's writing style and format.
 
+Format Matching Rules:
+1. If the user's note uses bullet points (• or -), continue with the same bullet style
+2. If the user's note uses numbered lists (1., 2., etc.), maintain numbered formatting
+3. If the user's note has headings, preserve the heading structure and levels
+4. Match paragraph spacing: use double line breaks if the user does, single if they do
+5. Keep the same indentation and list hierarchy as the user's note
+
+Content Enhancement Rules:
 1. Use the user's note as the primary structure
-2. Only add information from the transcript that directly relates to or clarifies points in the user's note
-3. Maintain the same formatting style as the user's note (bullets, paragraphs, headings)
-4. Be concise and only include essential details
-5. If there is no user note, create a brief, structured summary of the key points from the transcript
-6. Format the output to match the user's style:
-   - If the user's note uses bullet points, continue with bullets
-   - If the user's note uses paragraphs, maintain paragraph structure
-   - Keep the same heading levels and formatting
+2. Only add information from the transcript that directly relates to or clarifies the user's points
+3. Be concise - each addition should be 1-2 sentences maximum
+4. If there's no user note, create a brief, structured summary of key points
+5. Focus on enhancing existing points rather than adding new unrelated ones
 
-Remember: You are enhancing the user's note, not replacing it. Your additions should seamlessly blend with their existing content.`;
+Remember: You are seamlessly enriching the user's note, not rewriting it. Your additions should feel like the user's own thoughts, just with added detail from the transcript.`;
 
-  // Add project-specific context only if we have it
+  // Add project-specific context and format guidance
   if (projectData) {
-    systemMessage += `\n\nCurrent Project Context:
-Title: ${projectData.title}
-${projectData.note ? `\nUser's Note:\n${projectData.note}` : ''}
-${projectData.transcription ? `\nTranscription Context Available` : ''}
-${projectData.summary ? `\nSummary Context Available` : ''}`;
+    systemMessage += `\n\nCurrent Context:
+Project: ${projectData.title}
+${projectData.note ? `\nUser's Note Format:
+- Bullet Points: ${projectData.noteFormat?.hasBullets ? 'Yes - match style' : 'No'}
+- Numbered Lists: ${projectData.noteFormat?.hasNumbering ? 'Yes - continue numbering' : 'No'}
+- Headings: ${projectData.noteFormat?.hasHeadings ? 'Yes - maintain structure' : 'No'}
+- Paragraph Style: ${projectData.noteFormat?.paragraphStyle}
+
+User's Note:
+${projectData.note}` : ''}
+${projectData.transcription ? `\nTranscription Available` : ''}
+${projectData.summary ? `\nSummary Available` : ''}`;
   }
 
   try {
     const response = await openai.chat.completions.create({
-      model: CHAT_MODEL,
+      model: "gpt-4",
       messages: [
         { role: "system", content: systemMessage },
         { role: "user", content: message },
@@ -316,7 +331,8 @@ ${projectData.summary ? `\nSummary Context Available` : ''}`;
       message: assistantResponse,
       context: {
         hasUserNote: !!projectData?.note,
-        projectTitle: projectData?.title
+        projectTitle: projectData?.title,
+        noteFormat: projectData?.noteFormat
       }
     };
   } catch (error: any) {
