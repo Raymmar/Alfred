@@ -58,7 +58,7 @@ const EditorToolbar = ({ editor }: { editor: Editor | null }) => {
   if (!editor) return null;
 
   return (
-    <div className="sticky top-0 z-10 flex flex-wrap items-center gap-1 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-2">
+    <div className="sticky top-0 z-10 flex overflow-x-auto overflow-y-hidden items-center gap-1 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-2 whitespace-nowrap">
       <div className="flex items-center gap-1 border-r pr-2 mr-2">
         <Button
           variant="ghost"
