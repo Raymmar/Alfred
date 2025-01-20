@@ -3,6 +3,7 @@ import { useRecorder } from "@/hooks/use-recorder";
 import { useMediaDevices } from "@/hooks/use-media-devices";
 import { useProjects } from "@/hooks/use-projects";
 import { useSettings } from "@/hooks/use-settings";
+import { useAudioProcessing } from "@/hooks/use-audio-processing";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
@@ -65,6 +66,7 @@ export default function HomePage() {
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const recordingTimer = useRef<NodeJS.Timeout>();
   const { startRecording, stopRecording, uploadProgress: recorderProgress } = useRecorder();
+  const { processAudio, isProcessing: isAudioProcessing } = useAudioProcessing();
   const defaultNoteRef = useRef<string>('');
   const {
     audioInputs,
@@ -283,15 +285,17 @@ export default function HomePage() {
       variant={isRecording ? "destructive" : "default"}
       onClick={isRecording ? handleStopRecording : handleStartRecording}
       className="w-full relative"
-      disabled={!selectedAudioInput || isProcessing || isSaving}
+      disabled={!selectedAudioInput || isProcessing || isSaving || isAudioProcessing}
     >
-      {isProcessing || isSaving ? (
+      {isProcessing || isSaving || isAudioProcessing ? (
         <>
           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
           {isSaving ? (
             <>
               Saving... {uploadProgress > 0 && `(${Math.round(uploadProgress)}%)`}
             </>
+          ) : isAudioProcessing ? (
+            "Processing Audio..."
           ) : (
             "Processing..."
           )}
