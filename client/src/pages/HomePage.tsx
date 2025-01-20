@@ -7,7 +7,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { StopCircle, MoreVertical, Loader2, Pencil, Trash, RefreshCw, Mic, ArrowLeft, GripVertical } from "lucide-react";
+import { StopCircle, MoreVertical, Loader2, Pencil, Trash, ChevronUp, ChevronDown, GripVertical, Mic, ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MediaPlayer } from "@/components/MediaPlayer";
 import { useUser } from "@/hooks/use-user";
@@ -78,7 +78,6 @@ export default function HomePage() {
   const [isRecording, setIsRecording] = useState(false);
   const recordingWaveformRef = useRef<HTMLDivElement>(null);
   const recordingWavesurfer = useRef<WaveSurfer | null>(null);
-  const [processingProjectId, setProcessingProjectId] = useState<number | null>(null);
 
   useEffect(() => {
     if (recordingWaveformRef.current) {
@@ -114,6 +113,7 @@ export default function HomePage() {
 
   const projects = projectsData
     .filter(p => {
+      // Always filter out personal projects from recordings list
       return p.recordingUrl !== 'personal.none';
     })
     .map(p => ({
@@ -266,38 +266,6 @@ export default function HomePage() {
     }
   };
 
-  const handleReprocess = async (project: ProjectWithTodos) => {
-    try {
-      setProcessingProjectId(project.id);
-
-      toast({
-        title: "Processing audio...",
-        description: "Analyzing your recording...",
-        duration: 2000,
-      });
-
-      const processResult = await processAudio(project.id);
-
-      if (!processResult.ok) {
-        throw new Error(processResult.message);
-      }
-
-      toast({
-        title: "Processing complete",
-        description: "Your recording has been successfully processed!",
-      });
-    } catch (error: any) {
-      console.error('Processing error:', error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to process recording",
-        variant: "destructive",
-      });
-    } finally {
-      setProcessingProjectId(null);
-    }
-  };
-
   const handleHomeClick = () => {
     setSelectedProject(null);
     setLocation('/');
@@ -383,8 +351,7 @@ export default function HomePage() {
                   <div className="space-y-3 px-4">
                     {projects.map((project) => {
                       const isProcessing = !project.transcription;
-                      const isCurrentlyProcessing = (isProcessing && project.id === selectedProject?.id) || 
-                                                   project.id === processingProjectId;
+                      const isCurrentlyProcessing = isProcessing && project.id === selectedProject?.id;
 
                       return (
                         <Card
@@ -427,21 +394,6 @@ export default function HomePage() {
                                     <Pencil className="mr-2 h-4 w-4" />
                                     Rename
                                   </DropdownMenuItem>
-                                  {isProcessing && (
-                                    <DropdownMenuItem
-                                      onSelect={(e) => {
-                                        e.preventDefault();
-                                        handleReprocess(project);
-                                      }}
-                                      disabled={isCurrentlyProcessing}
-                                    >
-                                      <RefreshCw className={cn(
-                                        "mr-2 h-4 w-4",
-                                        isCurrentlyProcessing && "animate-spin"
-                                      )} />
-                                      {isCurrentlyProcessing ? "Processing..." : "Re-process"}
-                                    </DropdownMenuItem>
-                                  )}
                                   <DropdownMenuItem
                                     className="text-red-600"
                                     onSelect={async (e) => {
