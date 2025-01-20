@@ -7,17 +7,178 @@ import { findRecommendedTasks } from './embeddings';
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 import { marked } from 'marked';
 import fs from 'node:fs/promises';
+import path from 'path';
+import { spawn } from 'child_process';
 
 // Configure marked for clean HTML output compatible with TipTap and our styling
 marked.setOptions({
   gfm: true, // GitHub Flavored Markdown
   breaks: true, // Convert \n to <br>
-  mangle: false, // Don't escape HTML
-  sanitize: false, // Don't sanitize HTML (we handle this on the frontend)
   headerPrefix: '', // Don't prefix headers
   headerIds: false, // Don't add IDs to headers
   smartypants: true, // Use smart punctuation
 });
+
+// Update constants for file size limits and processing
+const MAX_FILE_SIZE_MB = 100; // Maximum size we'll process
+const CHUNK_SIZE_MB = 24; // Slightly below the Whisper API limit (25MB) for safety
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 5000;
+const WHISPER_MODEL = "whisper-1";
+
+// Helper function for handling API retries
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  retries = MAX_RETRIES,
+  delay = RETRY_DELAY_MS
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error: any) {
+    if (retries > 0 && (error?.status === 429 || error?.status >= 500)) {
+      console.log(`Retrying operation, ${retries} attempts remaining...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return withRetry(operation, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+}
+
+// Helper function to split audio into chunks using FFmpeg
+async function splitAudioIntoChunks(filepath: string, outputDir: string): Promise<string[]> {
+  const chunkFiles: string[] = [];
+  const basename = path.basename(filepath, path.extname(filepath));
+
+  return new Promise((resolve, reject) => {
+    // Use FFmpeg to split into 20-minute chunks (below 25MB typically)
+    const ffmpeg = spawn('ffmpeg', [
+      '-i', filepath,
+      '-f', 'segment',
+      '-segment_time', '1200', // 20 minutes
+      '-c', 'copy',
+      '-map', '0',
+      '-reset_timestamps', '1',
+      path.join(outputDir, `${basename}_chunk_%d.webm`)
+    ]);
+
+    let error = '';
+    ffmpeg.stderr.on('data', (data) => {
+      error += data.toString();
+    });
+
+    ffmpeg.on('close', async (code) => {
+      if (code !== 0) {
+        reject(new Error(`FFmpeg failed with code ${code}: ${error}`));
+        return;
+      }
+
+      try {
+        // Get all chunk files
+        const files = await fs.readdir(outputDir);
+        const chunkPattern = new RegExp(`${basename}_chunk_\\d+\\.webm`);
+        const chunks = files
+          .filter(f => chunkPattern.test(f))
+          .sort((a, b) => {
+            const numA = parseInt(a.match(/\d+/)?.[0] || '0');
+            const numB = parseInt(b.match(/\d+/)?.[0] || '0');
+            return numA - numB;
+          })
+          .map(f => path.join(outputDir, f));
+
+        resolve(chunks);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
+// Helper function to process audio chunks with Whisper
+async function processAudioChunk(
+  openai: OpenAI,
+  chunk: string,
+  options: { prompt?: string; language?: string } = {}
+): Promise<string> {
+  try {
+    console.log('Processing audio chunk:', {
+      path: chunk,
+      size: (await fs.stat(chunk)).size / (1024 * 1024) + 'MB'
+    });
+
+    const transcription = await withRetry(async () => {
+      const response = await openai.audio.transcriptions.create({
+        file: await fs.readFile(chunk),
+        model: WHISPER_MODEL,
+        response_format: 'verbose_json',
+        prompt: options.prompt,
+        language: options.language,
+      });
+      return response;
+    });
+
+    console.log('Chunk transcription completed:', {
+      chunks: transcription.segments?.length || 0,
+      duration: transcription.duration
+    });
+
+    return transcription.text;
+  } catch (error: any) {
+    console.error('Error processing audio chunk:', {
+      error: error.message,
+      status: error.status,
+      path: chunk
+    });
+    throw error;
+  }
+}
+
+// Export the transcription function for use in routes.ts
+export async function transcribeAudio(
+  filepath: string,
+  apiKey: string,
+  options: { prompt?: string; language?: string } = {}
+): Promise<string> {
+  const openai = new OpenAI({ apiKey });
+  const outputDir = path.dirname(filepath);
+  const chunks = await splitAudioIntoChunks(filepath, outputDir);
+  let fullTranscription = '';
+
+  console.log('Starting transcription process:', {
+    totalChunks: chunks.length,
+    options
+  });
+
+  try {
+    for (const [index, chunk] of chunks.entries()) {
+      const chunkTranscription = await processAudioChunk(openai, chunk, {
+        ...options,
+        // Pass previous chunk ending as prompt for continuity
+        prompt: fullTranscription.slice(-100) + (options.prompt || '')
+      });
+
+      fullTranscription += (index > 0 ? ' ' : '') + chunkTranscription;
+
+      console.log('Progress:', {
+        chunk: index + 1,
+        totalChunks: chunks.length,
+        transcriptionLength: fullTranscription.length
+      });
+
+      // Clean up chunk file after processing
+      await fs.unlink(chunk).catch(err => {
+        console.warn('Failed to clean up chunk file:', err);
+      });
+    }
+
+    return fullTranscription;
+  } catch (error) {
+    // Clean up any remaining chunks on error
+    await Promise.all(chunks.map(chunk => 
+      fs.unlink(chunk).catch(() => {})
+    ));
+    throw error;
+  }
+}
 
 // Helper function to convert markdown to HTML with minimal formatting
 function convertMarkdownToHTML(markdown: string): string {
@@ -151,10 +312,8 @@ export async function cleanupEmptyTasks(projectId: number): Promise<void> {
 // the newest OpenAI model is "gpt-4o" which was released May 13, 2024
 const CHAT_MODEL = "gpt-4o";
 
-// Update constant for file size limits
-const MAX_FILE_SIZE_MB = 100; // OpenAI Whisper API limit is 25MB
-const CHUNK_SIZE_MB = 24; // Slightly below the API limit for safety
 
+// Interface for Chat Options
 interface ChatOptions {
   userId: number;
   message: string;
@@ -165,26 +324,6 @@ interface ChatOptions {
   };
   promptType?: 'primary' | 'todo' | 'system';
 }
-
-// Helper function to split large audio files for transcription
-async function splitAudioForProcessing(filepath: string): Promise<string[]> {
-  const stats = await fs.promises.stat(filepath);
-  const fileSizeMB = stats.size / (1024 * 1024);
-
-  if (fileSizeMB <= CHUNK_SIZE_MB) {
-    return [filepath];
-  }
-
-  // If file is larger than chunk size, we need to split it
-  // This will be handled by the audio processing pipeline
-  console.log('Large file detected, will process in chunks:', {
-    totalSize: fileSizeMB,
-    chunks: Math.ceil(fileSizeMB / CHUNK_SIZE_MB)
-  });
-
-  return [filepath]; // For now, return original file - chunking handled elsewhere
-}
-
 
 export async function createChatCompletion({
   userId,

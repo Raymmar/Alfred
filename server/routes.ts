@@ -21,6 +21,18 @@ import { createChatCompletion } from "./lib/openai";
 import { RequestHandler } from "express-serve-static-core";
 import OpenAI from "openai";
 
+async function transcribeAudio(filePath: string, apiKey: string): Promise<string> {
+  const openai = new OpenAI({ apiKey });
+  const transcriptionResponse = await openai.audio.transcriptions.create({
+    file: fs.createReadStream(filePath),
+    model: "whisper-1",
+  });
+  if (!transcriptionResponse.text) {
+    throw new Error("No transcription received from OpenAI");
+  }
+  return transcriptionResponse.text;
+}
+
 function isEmptyTaskResponse(text: string): boolean {
   const trimmedText = text.trim().toLowerCase();
   const excludedPhrases = [
@@ -194,12 +206,12 @@ function requireAuth(req: AuthRequest, res: Response, next: Function): void {
   next();
 }
 
-export async function registerRoutes(app: Express): Promise<Server> {
+export function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
 
   try {
     // Ensure recordings directory exists
-    const RECORDINGS_DIR = await ensureStorageDirectory();
+    const RECORDINGS_DIR = ensureStorageDirectory();
 
     console.log("Using recordings directory:", RECORDINGS_DIR);
 
@@ -418,11 +430,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     app.post("/api/chat", requireAuth, async (req: AuthRequest, res: Response) => {
         try {
           const { message } = req.body;
-    
+
           if (typeof message !== "string" || !message.trim()) {
             return res.status(400).json({ message: "Invalid message" });
           }
-    
+
           const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
             const [userMsg] = await tx.insert(chats).values({
               userId: req.user!.id,
@@ -431,12 +443,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
               projectId: null,
               timestamp: new Date(),
             }).returning();
-    
+
             const aiResponse = await createChatCompletion({
               userId: req.user!.id,
               message: message.trim(),
             });
-    
+
             const [assistantMsg] = await tx.insert(chats).values({
               userId: req.user!.id,
               role: "assistant",
@@ -444,15 +456,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
               projectId: null,
               timestamp: new Date(),
             }).returning();
-    
+
             return [userMsg, assistantMsg];
           });
-    
+
           res.json({
             message: assistantMessage.content,
             messages: [userMessage, assistantMessage]
           });
-    
+
         } catch (error: any) {
           console.error("Chat error:", error);
           res.status(500).json({
@@ -466,20 +478,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (isNaN(projectId)) {
             return res.status(400).json({ message: "Invalid project ID" });
           }
-    
+
           const [project] = await db.query.projects.findMany({
             where: eq(projects.id, projectId),
             limit: 1,
           });
-    
+
           if (!project) {
             return res.status(404).json({ message: "Project not found" });
           }
-    
+
           if (project.userId !== req.user!.id) {
             return res.status(403).json({ message: "Not authorized" });
           }
-    
+
           const messages = await db.query.chats.findMany({
             where: and(
               eq(chats.userId, req.user!.id),
@@ -487,7 +499,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ),
             orderBy: asc(chats.timestamp),
           });
-    
+
           res.json(messages);
         } catch (error: any) {
           console.error("Error fetching project chat messages:", error);
@@ -500,25 +512,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (isNaN(projectId)) {
             return res.status(400).json({ message: "Invalid project ID" });
           }
-    
+
           const { message } = req.body;
           if (typeof message !== "string" || !message.trim()) {
             return res.status(400).json({ message: "Invalid message" });
           }
-    
+
           const [project] = await db.query.projects.findMany({
             where: eq(projects.id, projectId),
             limit: 1,
           });
-    
+
           if (!project) {
             return res.status(404).json({ message: "Project not found" });
           }
-    
+
           if (project.userId !== req.user!.id) {
             return res.status(403).json({ message: "Not authorized" });
           }
-    
+
           const [userMessage] = await db.insert(chats).values({
             userId: req.user!.id,
             projectId,
@@ -526,7 +538,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             content: message.trim(),
             timestamp: new Date(),
           }).returning();
-    
+
           const aiResponse = await createChatCompletion({
             userId: req.user!.id,
             message: message.trim(),
@@ -535,7 +547,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               summary: project.summary,
             },
           });
-    
+
           const [assistantMessage] = await db.insert(chats).values({
             userId: req.user!.id,
             projectId,
@@ -543,7 +555,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             content: aiResponse.message,
             timestamp: new Date(),
           }).returning();
-    
+
           res.json({
             message: aiResponse.message,
             messages: [userMessage, assistantMessage]
@@ -565,30 +577,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           Connection: "keep-alive",
           "X-Accel-Buffering": "no",
         });
-    
+
         const sendEvent = (event: string, data: any) => {
           res.write(`event: ${event}\n`);
           res.write(`data: ${JSON.stringify(data)}\n\n`);
         };
-    
+
         try {
           const filename = req.params.filename;
           const webmPath = path.join(RECORDINGS_DIR, filename);
-    
+
           try {
             await fs.promises.access(webmPath, fs.constants.R_OK);
           } catch (error) {
             return res.status(404).json({ message: "Recording not found" });
           }
-    
+
           const mp3Filename = filename.replace(".webm", ".mp3");
           const mp3Path = path.join(RECORDINGS_DIR, `temp_${mp3Filename}`);
-    
+
           console.log("Converting WebM to MP3:", {
             source: webmPath,
             destination: mp3Path,
           });
-    
+
           await new Promise<void>((resolve, reject) => {
             sendEvent("status", { state: "started" });
             const ffmpeg = spawn("ffmpeg", [
@@ -607,20 +619,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
               "pipe:1",
               mp3Path,
             ]);
-    
+
             ffmpeg.on("error", (error) => {
               console.error("FFmpeg process error:", error);
               reject(new Error("FFmpeg process failed to start"));
             });
-    
+
             ffmpeg.stdout.on("data", (data) => {
               console.log("FFmpeg:", data.toString());
             });
-    
+
             ffmpeg.stderr.on("data", (data) => {
               console.log("FFmpeg:", data.toString());
             });
-    
+
             ffmpeg.on("close", (code) => {
               if (code === 0) {
                 console.log("Conversion completed successfully");
@@ -630,7 +642,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               }
             });
           });
-    
+
           sendEvent("complete", { success: true });
           res.end();
         } catch (error) {
@@ -642,7 +654,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           sendEvent("error", { message: errorMessage });
           res.end();
         }
-    
+
         req.on("close", () => {
           console.log("Client disconnected from SSE stream");
         });
@@ -658,16 +670,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             RECORDINGS_DIR,
             `temp_${filename.replace(".webm", ".mp3")}`,
           );
-    
+
           res.setHeader("Content-Type", "audio/mp3");
           res.setHeader(
             "Content-Disposition",
             `attachment; filename="${filename.replace(".webm", ".mp3")}"`,
           );
-    
+
           const stream = fs.createReadStream(mp3Path);
           stream.pipe(res);
-    
+
           stream.on("end", () => {
             fs.unlink(mp3Path, (err) => {
               if (err) console.error("Error cleaning up temporary file:", err);
@@ -1475,24 +1487,24 @@ Format Rules:
       try {
         const projectId = parseInt(req.params.id);
         const { summary } = req.body;
-  
+
         if (typeof summary !== "string") {
           return res.status(400).json({ message: "Invalid summary content" });
         }
-  
+
         const [project] = await db.query.projects.findMany({
           where: eq(projects.id, projectId),
           limit: 1,
         });
-  
+
         if (!project) {
           return res.status(404).json({ message: "Project not found" });
         }
-  
+
         if (project.userId !== req.user!.id) {
           return res.status(403).json({ message: "Not authorized" });
         }
-  
+
         const [updatedProject] = await db
           .update(projects)
           .set({
@@ -1501,7 +1513,7 @@ Format Rules:
           })
           .where(eq(projects.id, projectId))
           .returning();
-  
+
         res.json(updatedProject);
       } catch (error: any) {
         console.error("Error updating project summary:", error);
@@ -1517,11 +1529,11 @@ Format Rules:
           ? parseInt(req.params.projectId)
           : undefined;
         const conditions = [eq(chats.userId, req.user!.id)];
-  
+
         if (projectId) {
           conditions.push(eq(chats.projectId, projectId));
         }
-  
+
         const messages = await db.query.chats.findMany({
           where: and(...conditions),
           orderBy: asc(chats.timestamp),
@@ -1541,7 +1553,7 @@ Format Rules:
         if (typeof text !== "string" || !text.trim()) {
           return res.status(400).json({ message: "Invalid task text" });
         }
-  
+
         // If no projectId is provided, find or create personal project
         let effectiveProjectId = projectId;
         if (!projectId) {
@@ -1553,7 +1565,7 @@ Format Rules:
             ),
             limit: 1,
           });
-  
+
           if (personalProject) {
             effectiveProjectId = personalProject.id;
           } else {
@@ -1571,7 +1583,7 @@ Format Rules:
             effectiveProjectId = newPersonalProject.id;
           }
         }
-  
+
         const [todo] = await db.insert(todos)
           .values({
             text: text.trim(),
@@ -1582,7 +1594,7 @@ Format Rules:
             order: 0,
           })
           .returning();
-  
+
         res.json(todo);
       } catch (error: any) {
         console.error("Error creating todo:", error);
@@ -1592,7 +1604,7 @@ Format Rules:
         });
       }
     });
-  
+
     app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const todoId = parseInt(req.params.id);
@@ -1709,10 +1721,10 @@ Format Rules:
       }
       res.status(401).send("Not logged in");
     });
-    return httpServer;
+    return Promise.resolve(httpServer);
   } catch (error) {
     console.error("Error during route registration:", error);
-    throw error; // Let the main error handler deal with it
+    return Promise.reject(error);
   }
 }
 

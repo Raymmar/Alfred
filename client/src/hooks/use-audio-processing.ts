@@ -74,17 +74,25 @@ function isDuplicateTask(newTask: string, existingTasks: Array<{ text: string }>
 
 async function processAudio(projectId: number): Promise<RequestResult<SelectProject>> {
   try {
-    // Increase timeout for larger file processing
+    // Extended timeout for larger file processing (90 minutes)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 90 * 60 * 1000);
+
     const response = await fetch(`/api/projects/${projectId}/process`, {
       method: 'POST',
       credentials: 'include',
-      // Add longer timeout for larger files
-      signal: AbortSignal.timeout(30 * 60 * 1000) // 30 minute timeout
+      signal: controller.signal
     });
+
+    clearTimeout(timeoutId);
 
     const data = await response.json();
 
     if (!response.ok) {
+      console.error('Processing failed:', {
+        status: response.status,
+        error: data.message || response.statusText
+      });
       return { 
         ok: false, 
         message: data.message || response.statusText 
@@ -127,10 +135,23 @@ async function processAudio(projectId: number): Promise<RequestResult<SelectProj
 
     return { ok: true, data };
   } catch (e: any) {
-    console.error('Audio processing error:', e);
+    // Better error handling for timeouts and network issues
+    let errorMessage = e.message || 'An unexpected error occurred';
+    if (e.name === 'AbortError') {
+      errorMessage = 'The request timed out. The recording may be too large or the server is busy.';
+    } else if (!navigator.onLine) {
+      errorMessage = 'You appear to be offline. Please check your internet connection.';
+    }
+
+    console.error('Audio processing error:', {
+      error: e,
+      message: errorMessage,
+      projectId
+    });
+
     return { 
       ok: false, 
-      message: e.message || 'An unexpected error occurred' 
+      message: errorMessage
     };
   }
 }
