@@ -278,7 +278,7 @@ export function NoteEditor({
       TaskItem.configure({
         nested: true,
         HTMLAttributes: {
-          class: 'flex items-start my-4',
+          class: 'flex items-center gap-2',
         },
       }),
       CharacterCount.configure({
