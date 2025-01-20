@@ -4,6 +4,99 @@ import { eq, and } from "drizzle-orm";
 import { users, projects, todos, chats } from "@db/schema";
 import { createEmbedding } from './embeddings';
 
+// Task filtering functions - used by routes.ts only
+export function isEmptyTaskResponse(text: string): boolean {
+  if (!text || typeof text !== 'string') {
+    console.log('Empty task check: Invalid or empty input');
+    return true;
+  }
+
+  const trimmedText = text.trim().toLowerCase();
+  if (!trimmedText) {
+    console.log('Empty task check: Empty after trimming');
+    return true;
+  }
+
+  const excludedPhrases = [
+    "no task",
+    "no tasks",
+    "no deliverable",
+    "no deliverables",
+    "no tasks identified",
+    "no deliverables identified",
+    "no tasks or deliverables",
+    "no tasks or deliverables identified",
+    "no specific tasks",
+    "no specific deliverables",
+    "none identified",
+    "could not identify",
+    "unable to identify",
+    "no action items",
+    "no actions",
+  ];
+
+  if (excludedPhrases.includes(trimmedText)) {
+    console.log('Empty task check: Exact match found:', trimmedText);
+    return true;
+  }
+
+  const hasPhrase = excludedPhrases.some(phrase => {
+    const includes = trimmedText.includes(phrase);
+    if (includes) {
+      console.log('Empty task check: Phrase match found:', phrase, 'in:', trimmedText);
+    }
+    return includes;
+  });
+
+  const containsOnlyPunctuation = /^[\s\.,!?:;-]*$/.test(trimmedText);
+  if (containsOnlyPunctuation) {
+    console.log('Empty task check: Contains only punctuation');
+    return true;
+  }
+
+  const patternChecks = [
+    /^no\s+.*\s+found/i,
+    /^could\s+not\s+.*\s+any/i,
+    /^unable\s+to\s+.*\s+any/i,
+    /^did\s+not\s+.*\s+any/i,
+    /^doesn't\s+.*\s+any/i,
+    /^does\s+not\s+.*\s+any/i,
+    /^none\s+.*\s+found/i,
+    /^no\s+.*\s+identified/i,
+  ];
+
+  const matchesPattern = patternChecks.some(pattern => {
+    const matches = pattern.test(trimmedText);
+    if (matches) {
+      console.log('Empty task check: Pattern match found:', pattern, 'in:', trimmedText);
+    }
+    return matches;
+  });
+
+  return hasPhrase || matchesPattern;
+}
+
+export async function cleanupEmptyTasks(projectId: number): Promise<void> {
+  try {
+    const projectTodos = await db.query.todos.findMany({
+      where: eq(todos.projectId, projectId),
+    });
+
+    for (const todo of projectTodos) {
+      if (isEmptyTaskResponse(todo.text)) {
+        console.log('Cleanup: Removing task that indicates no tasks:', todo.text);
+        await db.delete(todos)
+          .where(and(
+            eq(todos.id, todo.id),
+            eq(todos.projectId, projectId)
+          ));
+      }
+    }
+  } catch (error) {
+    console.error('Error during task cleanup:', error);
+  }
+}
+
 interface ChatOptions {
   userId: number;
   message: string;
@@ -51,37 +144,43 @@ export async function createChatCompletion({
     });
 
     if (project) {
-      const noteContent = project.note?.content || '';
-
       projectData = {
         title: project.title,
         transcription: project.transcription,
         summary: project.summary,
-        note: noteContent,
+        note: project.note?.content || '',
       };
     }
   }
 
-  // The user's note becomes the primary structure for the prompt
+  // Build a focused system message based on the user's note
   let systemMessage = '';
   if (projectData?.note) {
-    systemMessage = `You are assisting with a meeting recording. The user has written the following notes:
+    // Use the user's note structure as the primary prompt
+    systemMessage = `You are a focused AI assistant helping to enhance specific points from the user's notes. Here are the user's notes:
 
 ${projectData.note}
 
-Your task is to ONLY address and enhance these specific points from the user's notes using the recording's transcript. Follow these strict rules:
+Please follow these strict rules when enhancing these notes:
+1. ONLY address the specific points and questions in the user's notes above
+2. Maintain the EXACT format and structure of the user's notes
+3. Keep responses extremely brief - maximum 1-2 sentences per point
+4. Each answer should directly address the corresponding note or question
+5. Do not add any new points or unrelated information
+6. Match the user's writing style exactly:
+   - If they use bullet points, use the same bullet style
+   - If they use questions, keep the question-answer format
+   - If they use short phrases, respond with short phrases
+   - Preserve their paragraph spacing and formatting
 
-1. ONLY respond to the questions and points raised in the user's notes above
-2. Keep the exact same format as the user's notes
-3. Each answer should be brief and direct - maximum 1-2 sentences
-4. Do not add any information that doesn't directly answer the user's notes
-5. Preserve any question format if the user wrote questions
-6. Use the same style of bullet points or numbering as the user's notes
-
-Focus exclusively on finding specific answers from the transcript for each point in the user's notes. Do not add any general summaries or unrelated information.`;
+When you respond:
+- Make sure each point clearly corresponds to a point in the user's notes
+- Only use information from the transcript that directly answers their points
+- Keep the same order as the user's notes
+- Don't add any introductory text or conclusions`;
   } else {
-    // Fallback to user's custom prompt or default
-    systemMessage = user.defaultPrompt?.trim() || `Create a brief, structured summary of the key points from the transcript. Use bullet points and keep each point to 1-2 sentences.`;
+    // Use the user's default prompt or fallback
+    systemMessage = user.defaultPrompt?.trim() || 'Create a brief, structured summary of the key points from the transcript. Use bullet points and keep each point to 1-2 sentences.';
   }
 
   try {
@@ -92,7 +191,7 @@ Focus exclusively on finding specific answers from the transcript for each point
         { 
           role: "user", 
           content: projectData?.transcription 
-            ? `Please address each point/question from my notes using this transcript:\n\n${projectData.transcription}`
+            ? `Address only these specific notes using the transcript:\n\n${projectData.transcription}`
             : message
         }
       ],
