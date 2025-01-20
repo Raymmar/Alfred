@@ -175,7 +175,7 @@ export default function SettingsPage() {
                     <Textarea
                       id="defaultPrompt"
                       name="defaultPrompt"
-                      placeholder={DEFAULT_PRIMARY_PROMPT}
+                      placeholder={formData.defaultPrompt || DEFAULT_PRIMARY_PROMPT}
                       value={formData.defaultPrompt}
                       onChange={handleInputChange}
                       className="min-h-[40vh] resize-y"
@@ -203,7 +203,7 @@ export default function SettingsPage() {
                     <Textarea
                       id="todoPrompt"
                       name="todoPrompt"
-                      placeholder={DEFAULT_TODO_PROMPT}
+                      placeholder={formData.todoPrompt || DEFAULT_TODO_PROMPT}
                       value={formData.todoPrompt}
                       onChange={handleInputChange}
                       className="min-h-[40vh] resize-y"
@@ -231,7 +231,7 @@ export default function SettingsPage() {
                     <Textarea
                       id="systemPrompt"
                       name="systemPrompt"
-                      placeholder={DEFAULT_SYSTEM_PROMPT}
+                      placeholder={formData.systemPrompt || DEFAULT_SYSTEM_PROMPT}
                       value={formData.systemPrompt}
                       onChange={handleInputChange}
                       className="min-h-[40vh] resize-y"
