@@ -3,9 +3,10 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MediaPlayer } from "@/components/MediaPlayer";
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { TaskList } from "@/components/TaskList";
 import { useToast } from "@/hooks/use-toast";
+import { useAudioProcessing } from "@/hooks/use-audio-processing";
 import type { SelectProject, SelectTodo } from "@db/schema";
 
 interface ProjectWithTodos extends SelectProject {
@@ -24,43 +25,25 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState(defaultTab);
+  const { processAudio, isProcessing } = useAudioProcessing();
 
-  // Add mutation for re-processing
-  const reprocessMutation = useMutation({
-    mutationFn: async (projectId: number) => {
-      const response = await fetch(`/api/projects/${projectId}/reprocess`, {
-        method: 'POST',
-        credentials: 'include'
-      });
-
-      if (!response.ok) {
-        throw new Error(await response.text());
+  const handleReprocess = async (projectId: number) => {
+    try {
+      const result = await processAudio(projectId);
+      if (!result.ok) {
+        throw new Error(result.message);
       }
-
-      return response.json();
-    },
-    onSuccess: () => {
       toast({
         title: "Success",
         description: "Audio re-processing started",
       });
-      // Invalidate project data to show updated processing status
-      queryClient.invalidateQueries({ queryKey: ['projects', project.id] });
-    },
-    onError: (error: Error) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to re-process audio",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const handleReprocess = async (projectId: number) => {
-    try {
-      await reprocessMutation.mutateAsync(projectId);
     } catch (error) {
       console.error('Error re-processing project:', error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to re-process audio",
+        variant: "destructive",
+      });
     }
   };
 
