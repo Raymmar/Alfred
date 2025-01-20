@@ -1,12 +1,16 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { SelectProject } from "@db/schema";
 
+type ProcessingStage = 'recording' | 'transcribing' | 'analyzing' | 'completed' | 'error';
+
 type RequestResult<T = any> = {
   ok: true;
   data: T;
+  stage?: ProcessingStage;
 } | {
   ok: false;
   message: string;
+  stage?: ProcessingStage;
 };
 
 // Helper function to validate tasks before creation
@@ -72,9 +76,10 @@ function isDuplicateTask(newTask: string, existingTasks: Array<{ text: string }>
   });
 }
 
-async function processAudio(projectId: number): Promise<RequestResult<SelectProject>> {
+// Step 1: Transcribe the audio
+async function transcribeAudio(projectId: number): Promise<RequestResult> {
   try {
-    const response = await fetch(`/api/projects/${projectId}/process`, {
+    const response = await fetch(`/api/projects/${projectId}/transcribe`, {
       method: 'POST',
       credentials: 'include',
     });
@@ -84,7 +89,37 @@ async function processAudio(projectId: number): Promise<RequestResult<SelectProj
     if (!response.ok) {
       return { 
         ok: false, 
-        message: data.message || response.statusText 
+        message: data.message || response.statusText,
+        stage: 'transcribing'
+      };
+    }
+
+    return { ok: true, data, stage: 'transcribing' };
+  } catch (e: any) {
+    console.error('Transcription error:', e);
+    return { 
+      ok: false, 
+      message: e.message || 'Failed to transcribe audio',
+      stage: 'transcribing'
+    };
+  }
+}
+
+// Step 2: Extract insights from transcription
+async function extractInsights(projectId: number): Promise<RequestResult<SelectProject>> {
+  try {
+    const response = await fetch(`/api/projects/${projectId}/analyze`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return { 
+        ok: false, 
+        message: data.message || response.statusText,
+        stage: 'analyzing'
       };
     }
 
@@ -115,12 +150,42 @@ async function processAudio(projectId: number): Promise<RequestResult<SelectProj
       });
     }
 
-    return { ok: true, data };
+    return { ok: true, data, stage: 'analyzing' };
+  } catch (e: any) {
+    console.error('Analysis error:', e);
+    return { 
+      ok: false, 
+      message: e.message || 'Failed to analyze transcription',
+      stage: 'analyzing'
+    };
+  }
+}
+
+async function processAudio(projectId: number): Promise<RequestResult<SelectProject>> {
+  try {
+    // Step 1: Transcribe
+    const transcriptionResult = await transcribeAudio(projectId);
+    if (!transcriptionResult.ok) {
+      return transcriptionResult;
+    }
+
+    // Step 2: Extract insights
+    const analysisResult = await extractInsights(projectId);
+    if (!analysisResult.ok) {
+      return analysisResult;
+    }
+
+    return { 
+      ok: true, 
+      data: analysisResult.data,
+      stage: 'completed'
+    };
   } catch (e: any) {
     console.error('Audio processing error:', e);
     return { 
       ok: false, 
-      message: e.message || 'An unexpected error occurred' 
+      message: e.message || 'An unexpected error occurred',
+      stage: 'error'
     };
   }
 }
@@ -143,5 +208,6 @@ export function useAudioProcessing() {
   return {
     processAudio: processAudioMutation.mutateAsync,
     isProcessing: processAudioMutation.isPending,
+    processingStage: processAudioMutation.data?.stage || 'recording',
   };
 }
