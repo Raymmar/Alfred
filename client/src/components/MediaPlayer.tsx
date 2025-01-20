@@ -3,7 +3,7 @@ import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { ArrowLeft, Play, Pause, Loader2, Clock, MoreVertical, Pencil, Trash, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Play, Pause, Loader2, Clock, MoreVertical, Pencil, Trash } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { useToast } from '@/hooks/use-toast';
 import {
@@ -31,10 +31,9 @@ interface MediaPlayerProps {
   showBackButton?: boolean;
   onClose?: () => void;
   onTimeSelect?: (start: number, end: number) => void;
-  projectId?: number;
-  onRename?: (id: number) => void;
-  onDelete?: (id: number) => void;
-  onReprocess?: (id: number) => void;
+  projectId?: number;  // Add projectId for project operations
+  onRename?: (id: number) => void;  // Add rename handler
+  onDelete?: (id: number) => void;  // Add delete handler
 }
 
 export function MediaPlayer({
@@ -47,8 +46,7 @@ export function MediaPlayer({
   onTimeSelect,
   projectId,
   onRename,
-  onDelete,
-  onReprocess
+  onDelete
 }: MediaPlayerProps) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -81,9 +79,9 @@ export function MediaPlayer({
 
     const validateAudioFile = async (url: string): Promise<boolean> => {
       try {
-        const response = await fetch(url, {
+        const response = await fetch(url, { 
           method: 'HEAD',
-          credentials: 'include'
+          credentials: 'include' // Add credentials for authenticated requests
         });
 
         if (!response.ok) {
@@ -91,17 +89,20 @@ export function MediaPlayer({
           return false;
         }
 
+        // More lenient content type checking
         const contentType = response.headers.get('content-type');
         const contentLength = response.headers.get('content-length');
 
+        // Log headers for debugging
         console.log('Audio file headers:', {
           contentType,
           contentLength,
           status: response.status
         });
 
-        const isValidContentType = !contentType ||
-          contentType.includes('audio/') ||
+        // Accept any audio/* type, or if content-type is missing but we have content
+        const isValidContentType = !contentType || 
+          contentType.includes('audio/') || 
           contentType.includes('application/octet-stream');
 
         const hasContent = !contentLength || parseInt(contentLength) > 0;
@@ -117,6 +118,7 @@ export function MediaPlayer({
         return isValidContentType && hasContent;
       } catch (error) {
         console.error('Error validating audio file:', error);
+        // Be more lenient - if validation fails, still try to play
         return true;
       }
     };
@@ -162,6 +164,7 @@ export function MediaPlayer({
 
         await initializeWithDelay();
 
+        // More lenient validation
         const isValidAudio = await validateAudioFile(src);
         if (!isValidAudio) {
           console.warn('Audio validation warning - attempting to play anyway');
@@ -200,6 +203,7 @@ export function MediaPlayer({
           plugins: [regionsPlugin]
         });
 
+        // Enhanced error handling for decode errors
         ws.on('error', (err) => {
           console.error('WaveSurfer error:', err);
           if (err.toString().includes('decode')) {
@@ -257,12 +261,13 @@ export function MediaPlayer({
         ws.on('pause', () => { if (isActive) setIsPlaying(false) });
         ws.on('finish', () => { if (isActive) setIsPlaying(false) });
 
+        // Add timeout for loading
         const loadTimeout = setTimeout(() => {
           if (isActive && isLoading) {
             setError('Loading timeout - please try again');
             setIsLoading(false);
           }
-        }, 30000);
+        }, 30000); // 30 second timeout
 
         try {
           await ws.load(src);
@@ -400,7 +405,7 @@ export function MediaPlayer({
           <div className="flex flex-col gap-1">
             {showControls && (
               <div className="flex items-center gap-2">
-                {projectId && (onRename || onDelete || onReprocess) && (
+                {projectId && (onRename || onDelete) && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button
@@ -416,22 +421,11 @@ export function MediaPlayer({
                         <DropdownMenuItem
                           onSelect={(e) => {
                             e.preventDefault();
-                            onRename(projectId!);
+                            onRename(projectId);
                           }}
                         >
                           <Pencil className="mr-2 h-4 w-4" />
                           Rename
-                        </DropdownMenuItem>
-                      )}
-                      {onReprocess && (
-                        <DropdownMenuItem
-                          onSelect={(e) => {
-                            e.preventDefault();
-                            onReprocess(projectId!);
-                          }}
-                        >
-                          <RefreshCw className="mr-2 h-4 w-4" />
-                          Re-process Audio
                         </DropdownMenuItem>
                       )}
                       {onDelete && (
@@ -439,7 +433,7 @@ export function MediaPlayer({
                           className="text-red-600"
                           onSelect={(e) => {
                             e.preventDefault();
-                            onDelete(projectId!);
+                            onDelete(projectId);
                           }}
                         >
                           <Trash className="mr-2 h-4 w-4" />

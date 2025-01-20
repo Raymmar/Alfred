@@ -6,7 +6,6 @@ import { MediaPlayer } from "@/components/MediaPlayer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { TaskList } from "@/components/TaskList";
 import { useToast } from "@/hooks/use-toast";
-import { useAudioProcessing } from "@/hooks/use-audio-processing";
 import type { SelectProject, SelectTodo } from "@db/schema";
 
 interface ProjectWithTodos extends SelectProject {
@@ -25,27 +24,6 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState(defaultTab);
-  const { processAudio, isProcessing } = useAudioProcessing();
-
-  const handleReprocess = async (projectId: number) => {
-    try {
-      const result = await processAudio(projectId);
-      if (!result.ok) {
-        throw new Error(result.message);
-      }
-      toast({
-        title: "Success",
-        description: "Audio re-processing started",
-      });
-    } catch (error) {
-      console.error('Error re-processing project:', error);
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to re-process audio",
-        variant: "destructive",
-      });
-    }
-  };
 
   useEffect(() => {
     if (open) {
@@ -72,12 +50,12 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
         const previousTodos = queryClient.getQueryData(['todos']);
 
         // Optimistically update projects cache
-        queryClient.setQueryData<ProjectWithTodos[]>(['projects'], (old = []) =>
+        queryClient.setQueryData<ProjectWithTodos[]>(['projects'], (old = []) => 
           old.filter(p => p.id !== project.id)
         );
 
         // Optimistically update todos cache by filtering out todos from this project
-        queryClient.setQueryData<SelectTodo[]>(['todos'], (old = []) =>
+        queryClient.setQueryData<SelectTodo[]>(['todos'], (old = []) => 
           old.filter(todo => todo.projectId !== project.id)
         );
 
@@ -129,13 +107,11 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
           </DialogDescription>
         </DialogHeader>
         <div className="aspect-video mb-4">
-          <MediaPlayer
+          <MediaPlayer 
             src={currentProject.recordingUrl ? `/recordings/${currentProject.recordingUrl}` : ''}
             className="w-full h-full"
             showControls={true}
             autoPlay={false}
-            projectId={currentProject.id}
-            onReprocess={handleReprocess}
           />
         </div>
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="mt-4">
@@ -157,8 +133,8 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
           <TabsContent value="tasks" className="mt-4">
             <ScrollArea className="h-[400px] rounded-md border bg-transparent">
               <div className="p-4">
-                <TaskList
-                  maintainOrder
+                <TaskList 
+                  maintainOrder 
                   className="w-full"
                   projectId={currentProject.id}
                 />
