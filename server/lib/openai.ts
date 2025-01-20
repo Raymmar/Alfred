@@ -4,6 +4,7 @@ import { eq, and } from "drizzle-orm";
 import { settings, users, projects, todos, chats } from "@db/schema";
 import { updateChatContext, createEmbedding } from './embeddings';
 import { findRecommendedTasks } from './embeddings';
+import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT } from "@/lib/constants";
 
 // the newest OpenAI model is "gpt-4o" which was released May 13, 2024
 const CHAT_MODEL = "gpt-4o";
@@ -113,6 +114,7 @@ interface ChatOptions {
     summary?: string | null;
     projectId?: number;
   };
+  promptType?: 'primary' | 'todo';
 }
 
 async function getContextData(userId: number) {
@@ -191,6 +193,7 @@ export async function createChatCompletion({
   userId,
   message,
   context,
+  promptType = 'primary'
 }: ChatOptions) {
   const user = await db.query.users.findFirst({
     where: eq(users.id, userId),
@@ -210,6 +213,10 @@ export async function createChatCompletion({
     throw new Error("OpenAI API key not found. Please add your API key in settings.");
   }
 
+  // Use user's custom prompts or fall back to defaults
+  const primaryPrompt = user.defaultPrompt || DEFAULT_PRIMARY_PROMPT;
+  const todoPrompt = user.todoPrompt || DEFAULT_TODO_PROMPT;
+
   const openai = new OpenAI({
     apiKey,
   });
@@ -223,10 +230,11 @@ export async function createChatCompletion({
     includeCompleted: false
   });
 
-  // Build system message with enhanced contextual awareness
-  let systemMessage = `You are Alfred, an intelligent AI assistant with comprehensive access to the user's recording library and task management system.
+  // Use the appropriate prompt based on the promptType
+  const promptToUse = promptType === 'todo' ? todoPrompt : primaryPrompt;
 
-Database Context:
+  // Build system message with enhanced contextual awareness and selected prompt
+  let systemMessage = `${promptToUse}\n\nDatabase Context:
 Total Projects: ${userData.totalProjects}
 Total Recordings: ${userData.totalRecordings}
 Total Tasks: ${userData.totalTodos} (${userData.totalCompletedTodos} completed)
@@ -262,17 +270,7 @@ ${recommendedTasks.length > 0
         task.projectTitle ? ` (Project: ${task.projectTitle})` : ''
       }`
     ).join('\n')
-    : 'No specifically relevant tasks found for this conversation.'}
-
-Instructions:
-1. Use the provided context to give informed responses about recordings and projects
-2. When asked about "last recording" or "recent recording", refer to the Latest Recording section
-3. Maintain conversation continuity by referencing previous interactions
-4. Be concise. Do not add any filler words or pleasantries to your responses.
-5. If recommending actions, prioritize suggesting tasks from the recommended tasks list
-6. When discussing tasks, reference their current status and project context
-7. Consider both task relevance and project relationships when making suggestions
-8. When asked about recordings, provide both high-level summaries and specific details if available`;
+    : 'No specifically relevant tasks found for this conversation.'}`;
 
   // For project-specific chat, add focused context
   if (context?.projectId) {
