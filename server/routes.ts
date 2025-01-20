@@ -691,12 +691,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const form = formidable({
           uploadDir: recordingsDir,
           keepExtensions: true,
-          maxFileSize: 300 * 1024 * 1024, // 300MB max for each chunk
+          maxFileSize: 1024 * 1024 * 1024, // Increase to 1GB max for each chunk
+          maxTotalFileSize: 2 * 1024 * 1024 * 1024, // 2GB total file size limit
+          multiples: true,
           filter: (part) => {
             if (!part.mimetype) return false;
             console.log('Filtering upload:', {
               mimetype: part.mimetype,
               originalFilename: part.originalFilename,
+              size: part.size
             });
             // Accept both general audio and specific webm types
             const isValidType = part.mimetype.includes('audio/') || 
@@ -1174,8 +1177,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
    - Identify key topic changes and sections
    - Format as: "# Topic Title [HH:MM:SS.mmm]"
    - Place at natural topic transitions
-
-2. Regular Timestamps:
+1. Regular Timestamps:
    - Add timestamps [HH:MM:SS.mmm] every 10-30 seconds
    - Place at natural speech breaks
    - Keep timestamps sequential

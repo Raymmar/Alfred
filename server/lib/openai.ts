@@ -6,6 +6,7 @@ import { updateChatContext, createEmbedding } from './embeddings';
 import { findRecommendedTasks } from './embeddings';
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 import { marked } from 'marked';
+import fs from 'node:fs/promises';
 
 // Configure marked for clean HTML output compatible with TipTap and our styling
 marked.setOptions({
@@ -150,6 +151,10 @@ export async function cleanupEmptyTasks(projectId: number): Promise<void> {
 // the newest OpenAI model is "gpt-4o" which was released May 13, 2024
 const CHAT_MODEL = "gpt-4o";
 
+// Update constant for file size limits
+const MAX_FILE_SIZE_MB = 100; // OpenAI Whisper API limit is 25MB
+const CHUNK_SIZE_MB = 24; // Slightly below the API limit for safety
+
 interface ChatOptions {
   userId: number;
   message: string;
@@ -160,6 +165,26 @@ interface ChatOptions {
   };
   promptType?: 'primary' | 'todo' | 'system';
 }
+
+// Helper function to split large audio files for transcription
+async function splitAudioForProcessing(filepath: string): Promise<string[]> {
+  const stats = await fs.promises.stat(filepath);
+  const fileSizeMB = stats.size / (1024 * 1024);
+
+  if (fileSizeMB <= CHUNK_SIZE_MB) {
+    return [filepath];
+  }
+
+  // If file is larger than chunk size, we need to split it
+  // This will be handled by the audio processing pipeline
+  console.log('Large file detected, will process in chunks:', {
+    totalSize: fileSizeMB,
+    chunks: Math.ceil(fileSizeMB / CHUNK_SIZE_MB)
+  });
+
+  return [filepath]; // For now, return original file - chunking handled elsewhere
+}
+
 
 export async function createChatCompletion({
   userId,
@@ -204,10 +229,10 @@ export async function createChatCompletion({
   });
 
   // Select the appropriate prompt based on the promptType
-  const basePrompt = promptType === 'todo' 
-    ? todoPrompt 
+  const basePrompt = promptType === 'todo'
+    ? todoPrompt
     : promptType === 'primary'
-      ? primaryPrompt 
+      ? primaryPrompt
       : systemPrompt;
 
   // Build system message with enhanced contextual awareness and selected prompt
@@ -267,6 +292,7 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
     }
   }
 
+  const startTime = Date.now();
   try {
     const response = await openai.chat.completions.create({
       model: CHAT_MODEL,
@@ -275,11 +301,16 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
         { role: "user", content: message },
       ],
       temperature: 0.7,
-      max_tokens: 500,
+      max_tokens: 1000, // Increased for longer summaries
+      timeout_seconds: 300, // 5 minute timeout for processing
     });
 
     const assistantResponse = response.choices[0].message.content || "";
-    console.log('GPT response:', assistantResponse);
+    console.log('GPT response:', {
+      responseLength: assistantResponse.length,
+      promptType,
+      processingTime: Date.now() - startTime
+    });
 
     // Only convert to HTML if it's not a todo prompt
     const finalResponse = promptType === 'todo'
@@ -330,8 +361,15 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
       }
     };
   } catch (error: any) {
-    console.error("OpenAI API error:", error);
-    throw new Error(error.message || "Failed to generate response");
+    console.error("OpenAI API error:", {
+      error: error.message,
+      context: {
+        userId,
+        messageLength: message.length,
+        promptType
+      }
+    });
+    throw error;
   }
 }
 

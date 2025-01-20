@@ -74,9 +74,12 @@ function isDuplicateTask(newTask: string, existingTasks: Array<{ text: string }>
 
 async function processAudio(projectId: number): Promise<RequestResult<SelectProject>> {
   try {
+    // Increase timeout for larger file processing
     const response = await fetch(`/api/projects/${projectId}/process`, {
       method: 'POST',
       credentials: 'include',
+      // Add longer timeout for larger files
+      signal: AbortSignal.timeout(30 * 60 * 1000) // 30 minute timeout
     });
 
     const data = await response.json();
@@ -87,6 +90,13 @@ async function processAudio(projectId: number): Promise<RequestResult<SelectProj
         message: data.message || response.statusText 
       };
     }
+
+    // Add logging for debugging processing times
+    console.log('Audio processing completed:', {
+      projectId,
+      processingTime: Date.now() - (response.headers.get('X-Processing-Start') ? parseInt(response.headers.get('X-Processing-Start')!) : 0),
+      responseSize: JSON.stringify(data).length
+    });
 
     // Additional validation of tasks in the response
     if (data.todos) {
