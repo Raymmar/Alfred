@@ -203,7 +203,7 @@ export default function SettingsPage() {
                     <Textarea
                       id="todoPrompt"
                       name="todoPrompt"
-                      placeholder={formData.todoPrompt || DEFAULT_TODO_PROMPT}
+                      placeholder={DEFAULT_TODO_PROMPT}
                       value={formData.todoPrompt}
                       onChange={handleInputChange}
                       className="min-h-[40vh] resize-y"
