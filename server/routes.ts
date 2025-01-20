@@ -662,34 +662,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
           maxFileSize: 300 * 1024 * 1024, // 300MB max for each chunk
           filter: ({ mimetype, originalFilename, size }) => {
             console.log('Filtering upload:', { mimetype, originalFilename, size });
-
             // Accept both general audio and specific webm types
             const isValidType = mimetype?.includes('audio/') || 
                               mimetype === 'audio/webm' ||
                               mimetype === 'audio/webm;codecs=opus';
-
             if (!isValidType) {
               console.warn('Invalid mime type:', mimetype);
               return false;
             }
-
             // Basic size validation during filter
             if (size === 0) {
               console.warn('Empty file detected during filter');
               return false;
             }
-
             return true;
           }
         });
-
         console.log('Starting file upload processing');
         const [fields, files] = await form.parse(req);
         console.log('Form parse complete:', { 
           fieldKeys: Object.keys(fields),
           filesReceived: files ? Object.keys(files) : 'none'
         });
-
         const file = files.recording?.[0];
         if (!file) {
           console.error('No recording file provided in request');
@@ -698,30 +692,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
             details: "The upload request must include a file named 'recording'"
           });
         }
-
         console.log('Received file:', {
           originalName: file.originalFilename,
           newName: file.newFilename,
           size: file.size,
           type: file.mimetype
         });
-
         // Get additional chunk information from the request
         const isLastChunk = fields.isLastChunk?.[0] === 'true';
         const previousChunks = fields.previousChunks?.[0] 
           ? JSON.parse(fields.previousChunks[0] as string) 
           : [];
-
         // If this is part of a chunked upload
         if (previousChunks.length > 0 || !isLastChunk) {
           console.log('Processing chunked upload:', {
             isLastChunk,
             previousChunksCount: previousChunks.length
           });
-
           // Add current chunk to the list
           const allChunks = [...previousChunks, file.newFilename];
-
           // If this is the last chunk, reassemble all chunks
           if (isLastChunk) {
             try {
@@ -736,11 +725,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
               });
             }
           }
-
           // If not the last chunk, just return the current filename
           return res.json({ filename: file.newFilename });
         }
-
         // Single file upload (small recordings)
         if (file.size === 0) {
           console.error('Empty recording file received');
@@ -752,19 +739,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             details: "The uploaded recording file is empty"
           });
         }
-
         // Set proper file permissions
         await fs.promises.chmod(file.filepath, 0o666);
-
         console.log('Successfully saved recording:', {
           filename: file.newFilename,
           size: file.size,
           type: file.mimetype,
           path: file.filepath
         });
-
         return res.json({ filename: file.newFilename });
-
       } catch (error: any) {
         console.error('Error handling file upload:', error);
         res.status(500).json({
@@ -1055,6 +1038,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
     app.post("/api/projects/:projectId/process", requireAuth, async (req: AuthRequest, res: Response) => {
+      let mp3FilePath: string | undefined;
+
       try {
         const projectId = parseInt(req.params.projectId);
         if (isNaN(projectId)) {
@@ -1078,26 +1063,143 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: "No recording found for this project" });
         }
 
+        const [user] = await db.query.users.findMany({
+          where: eq(users.id, req.user!.id),
+          limit: 1,
+        });
+
+        if (!user.openaiApiKey) {
+          return res.status(400).json({ message: "OpenAI API key not set" });
+        }
+
         console.log("Starting audio processing for project:", {
           projectId,
           recordingUrl: project.recordingUrl,
           userId: req.user!.id
         });
 
-        // Here you would typically send the audio to your processing service
-        // For now, we'll just update the project to show it's been processed
-        const [updatedProject] = await db
-          .update(projects)
+        const openai = new OpenAI({ apiKey: user.openaiApiKey });
+        const recordingPath = path.join(RECORDINGS_DIR, project.recordingUrl);
+
+        // Verify recording file exists
+        try {
+          await fs.promises.access(recordingPath, fs.constants.R_OK);
+        } catch (error) {
+          console.error("Recording file access error:", error);
+          return res.status(404).json({
+            message: "Recording file not found or not accessible",
+          });
+        }
+
+        // Convert to MP3 for Whisper
+        mp3FilePath = path.join(RECORDINGS_DIR, `temp_${Date.now()}.mp3`);
+        await new Promise<void>((resolve, reject) => {
+          const ffmpeg = spawn("ffmpeg", [
+            "-i", recordingPath,
+            "-vn",
+            "-acodec", "libmp3lame",
+            "-ab", "128k",
+            "-ar", "44100",
+            "-af", "silenceremove=1:0:-50dB",
+            "-y",
+            mp3FilePath,
+          ]);
+
+          ffmpeg.on("error", (error) => {
+            console.error("FFmpeg process error:", error);
+            reject(new Error(`FFmpeg process failed: ${error.message}`));
+          });
+
+          ffmpeg.on("close", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`FFmpeg process exited with code ${code}`));
+          });
+        });
+
+        // Get transcription
+        console.log("Starting Whisper transcription");
+        const transcriptionResponse = await openai.audio.transcriptions.create({
+          file: fs.createReadStream(mp3FilePath),
+          model: "whisper-1",
+        });
+
+        if (!transcriptionResponse.text) {
+          throw new Error("No transcription received from OpenAI");
+        }
+
+        console.log("Transcription successful, length:", transcriptionResponse.text.length);
+
+        // Generate summary
+        const summaryResponse = await openai.chat.completions.create({
+          model: "gpt-4",
+          messages: [
+            {
+              role: "system",
+              content: user.defaultPrompt || `Provide a clear and concise summary of the key points discussed in this recording. Focus on the main ideas, decisions, and important details.`,
+            },
+            {
+              role: "user",
+              content: `Transcript:\n${transcriptionResponse.text}`,
+            },
+          ],
+          temperature: 0.7,
+          max_tokens: 1000,
+        });
+
+        if (!summaryResponse.choices[0]?.message?.content) {
+          throw new Error("No summary generated from OpenAI");
+        }
+
+        const summary = summaryResponse.choices[0].message.content.trim();
+
+        // Task extraction with improved filtering
+        const aiResponse = await createChatCompletion({
+          userId: req.user!.id,
+          message: user.todoPrompt || "Please identify the tasks from this recording.",
+          context: {
+            transcription: transcriptionResponse.text,
+            projectId,
+            summary,
+          },
+        });
+
+        // Process tasks with filtering
+        if (aiResponse.message && !isEmptyTaskResponse(aiResponse.message)) {
+          const tasks = aiResponse.message
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line && !isEmptyTaskResponse(line))
+            .map(task => ({
+              text: task,
+              projectId,
+              completed: false,
+              order: 0,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            }));
+
+          if (tasks.length > 0) {
+            await db.insert(todos).values(tasks);
+          }
+        }
+
+        // Update project with processed information
+        const [updatedProject] = await db.update(projects)
           .set({
-            processedAt: new Date(),
-            // Add any other processing-related fields here
+            transcription: transcriptionResponse.text,
+            summary,
+            updatedAt: new Date(),
           })
           .where(eq(projects.id, projectId))
           .returning();
 
+        // Final cleanup to catch any tasks that might have slipped through
+        await cleanupEmptyTasks(projectId);
+
         console.log("Audio processing completed for project:", {
           projectId,
-          processedAt: updatedProject.processedAt,
+          transcriptionLength: transcriptionResponse.text.length,
+          summaryLength: summary.length,
         });
 
         return res.json(updatedProject);
@@ -1107,6 +1209,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           message: "Failed to process audio",
           error: error instanceof Error ? error.message : String(error)
         });
+      } finally {
+        // Cleanup temporary MP3 file
+        try {
+          if (mp3FilePath && fs.existsSync(mp3FilePath)) {
+            await fs.promises.unlink(mp3FilePath);
+            console.log("Cleaned up temporary MP3 file:", mp3FilePath);
+          }
+        } catch (cleanupError) {
+          console.error("Failed to clean up temporary MP3 file:", cleanupError);
+        }
       }
     });
 
@@ -1240,24 +1352,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const projectId = parseInt(req.params.id);
         const { summary } = req.body;
-
         if (typeof summary !== "string") {
           return res.status(400).json({ message: "Invalid summary content" });
         }
-
         const [project] = await db.query.projects.findMany({
           where: eq(projects.id, projectId),
           limit: 1,
         });
-
         if (!project) {
           return res.status(404).json({ message: "Project not found" });
         }
-
         if (project.userId !== req.user!.id) {
           return res.status(403).json({ message: "Not authorized" });
         }
-
         const [updatedProject] = await db
           .update(projects)
           .set({
@@ -1266,7 +1373,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           })
           .where(eq(projects.id, projectId))
           .returning();
-
         res.json(updatedProject);
       } catch (error: any) {
         console.error("Error updating project summary:", error);
@@ -1282,11 +1388,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ? parseInt(req.params.projectId)
           : undefined;
         const conditions = [eq(chats.userId, req.user!.id)];
-
         if (projectId) {
           conditions.push(eq(chats.projectId, projectId));
         }
-
         const messages = await db.query.chats.findMany({
           where: and(...conditions),
           orderBy: asc(chats.timestamp),
