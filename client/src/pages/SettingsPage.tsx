@@ -204,7 +204,7 @@ export default function SettingsPage() {
                       id="todoPrompt"
                       name="todoPrompt"
                       placeholder={DEFAULT_TODO_PROMPT}
-                      value={formData.todoPrompt}
+                      value={formData.todoPrompt || DEFAULT_TODO_PROMPT}
                       onChange={handleInputChange}
                       className="min-h-[40vh] resize-y"
                     />
