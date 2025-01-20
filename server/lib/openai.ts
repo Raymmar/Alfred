@@ -129,7 +129,7 @@ export async function createChatCompletion({
     apiKey,
   });
 
-  // Get project data and user's note
+  // Get project data and note structure
   let projectData = null;
   if (context?.projectId) {
     const project = await db.query.projects.findFirst({
@@ -144,40 +144,50 @@ export async function createChatCompletion({
     });
 
     if (project) {
+      const noteContent = project.note?.content || '';
+
+      // Extract the structure of the user's note
+      const noteLines = noteContent.split('\n').map(line => line.trim()).filter(Boolean);
+      const hasQuestions = noteLines.some(line => line.includes('?'));
+      const hasBullets = noteLines.some(line => line.startsWith('-') || line.startsWith('•'));
+
       projectData = {
         title: project.title,
         transcription: project.transcription,
         summary: project.summary,
-        note: project.note?.content || '',
+        note: noteContent,
+        structure: {
+          lines: noteLines,
+          isQuestionBased: hasQuestions,
+          hasBullets: hasBullets
+        }
       };
     }
   }
 
-  // Build a focused system message based on the user's note
+  // Build a focused system message that uses the note as the exact response structure
   let systemMessage = '';
   if (projectData?.note) {
-    // Use the user's note structure as the primary prompt
-    systemMessage = `You are a focused AI assistant helping to enhance specific points from the user's notes. Here are the user's notes:
+    const { structure } = projectData;
+
+    systemMessage = `Your task is to provide specific information from the transcript for each point in the user's note. Here is the user's original note structure:
 
 ${projectData.note}
 
-Please follow these strict rules when enhancing these notes:
-1. ONLY address the specific points and questions in the user's notes above
-2. Maintain the EXACT format and structure of the user's notes
-3. Keep responses extremely brief - maximum 1-2 sentences per point
-4. Each answer should directly address the corresponding note or question
-5. Do not add any new points or unrelated information
-6. Match the user's writing style exactly:
-   - If they use bullet points, use the same bullet style
-   - If they use questions, keep the question-answer format
-   - If they use short phrases, respond with short phrases
-   - Preserve their paragraph spacing and formatting
+Follow these exact requirements:
+1. Use the user's note VERBATIM as your response template
+2. For each line in their note:
+   ${structure.isQuestionBased ? 
+     '- If it is a question, provide a direct, specific answer from the transcript\n   - Keep the original question and add the answer below it' :
+     '- Add relevant details from the transcript that specifically relate to that point'}
+3. Maintain the exact same formatting:
+   ${structure.hasBullets ? '- Use the same bullet points/formatting as the original note' : '- Keep the same paragraph structure'}
+4. Each response should be 1-2 sentences maximum
+5. Only include information that directly relates to each specific point
+6. Do not add any new points or general summaries
 
-When you respond:
-- Make sure each point clearly corresponds to a point in the user's notes
-- Only use information from the transcript that directly answers their points
-- Keep the same order as the user's notes
-- Don't add any introductory text or conclusions`;
+Important: Your response must follow the user's note structure EXACTLY, point by point, with no additional content.`;
+
   } else {
     // Use the user's default prompt or fallback
     systemMessage = user.defaultPrompt?.trim() || 'Create a brief, structured summary of the key points from the transcript. Use bullet points and keep each point to 1-2 sentences.';
@@ -191,7 +201,7 @@ When you respond:
         { 
           role: "user", 
           content: projectData?.transcription 
-            ? `Address only these specific notes using the transcript:\n\n${projectData.transcription}`
+            ? `Using this transcript, provide specific information ONLY for the points in my note above:\n\n${projectData.transcription}`
             : message
         }
       ],
@@ -240,7 +250,8 @@ When you respond:
       message: assistantResponse,
       context: {
         hasUserNote: !!projectData?.note,
-        isEnhancingUserNote: true
+        isEnhancingUserNote: true,
+        noteStructure: projectData?.structure
       }
     };
   } catch (error: any) {
