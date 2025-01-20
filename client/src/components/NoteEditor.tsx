@@ -317,12 +317,12 @@ export function NoteEditor({
       }),
       BulletList.configure({
         HTMLAttributes: {
-          class: 'list-disc list-inside',
+          class: 'list-disc pl-6 space-y-2',
         }
       }),
       OrderedList.configure({
         HTMLAttributes: {
-          class: 'list-decimal list-inside',
+          class: 'list-decimal pl-6 space-y-2',
         }
       }),
     ],
@@ -333,7 +333,7 @@ export function NoteEditor({
     },
     editorProps: {
       attributes: {
-        class: 'prose prose-sm sm:prose lg:prose-lg xl:prose-2xl mx-auto focus:outline-none',
+        class: 'prose prose-sm sm:prose lg:prose-lg xl:prose-2xl mx-auto focus:outline-none [&_.ProseMirror_ul]:my-4 [&_.ProseMirror_ol]:my-4',
       },
     },
   });
