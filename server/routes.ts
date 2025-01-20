@@ -1172,7 +1172,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               content: `Format the transcript with only these elements:
 1. Chapter Headers:
    - Identify key topic changes and sections
-   - Format as: "# Topic Title [HH:MM:SS.mmm]"
+   - Format as: "# Topic Title"
    - Place at natural topic transitions
 
 2. Regular Timestamps:
