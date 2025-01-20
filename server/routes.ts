@@ -22,7 +22,6 @@ import { RequestHandler } from "express-serve-static-core";
 import OpenAI from "openai";
 import fetch from "node-fetch";
 
-
 function isEmptyTaskResponse(text: string): boolean {
   const trimmedText = text.trim().toLowerCase();
   const excludedPhrases = [
@@ -1811,8 +1810,68 @@ Format Rules:
           apiKey: user.openaiApiKey,
         });
 
+        // Generate title from transcription
+        const titleResponse = await openai.chat.completions.create({
+          model: "gpt-4",
+          messages: [
+            {
+              role: "system",
+              content: "You are a helpful assistant that creates concise, descriptive titles.",
+            },
+            {
+              role: "user",
+              content: `Please create a brief, descriptive title (maximum 5-7 words) that captures the main topic or purpose of this transcription:\n\n${project.transcription}`,
+            },
+          ],
+        });
+
+        const generatedTitle = titleResponse.choices[0]?.message?.content?.trim() || project.title;
+
+        // Format transcription with proper timestamps and sections
+        const formattingPrompt = `
+Please format this transcription with clear sections and timestamps:
+
+Guidelines:
+1. Section Headers:
+   - Identify key topic changes and sections
+   - Format as: "# Topic Title [HH:MM:SS.mmm]"
+   - Place at natural topic transitions
+2. Regular Timestamps:
+   - Add timestamps [HH:MM:SS.mmm] every 10-30 seconds
+   - Place at natural speech breaks
+   - Keep timestamps sequential
+
+Original transcription:
+${project.transcription}`;
+
+        const formattingResponse = await openai.chat.completions.create({
+          model: "gpt-4",
+          messages: [
+            {
+              role: "system",
+              content: "You are a helpful assistant that formats transcriptions with proper timestamps and sections.",
+            },
+            {
+              role: "user",
+              content: formattingPrompt,
+            },
+          ],
+        });
+
+        const formattedTranscription = formattingResponse.choices[0]?.message?.content || project.transcription;
+
         // Generate summary using custom prompt if available
-        const summaryPrompt = user.defaultPrompt || "Please provide a concise summary of the following text:\n\n";
+        const summaryPrompt = user.defaultPrompt || 
+          `Please analyze this transcription and provide a detailed summary including:
+           1. Main topics and key points discussed
+           2. Important decisions or conclusions reached
+           3. Context and background information
+           4. Any notable quotes or statements
+           5. Overall themes and patterns
+
+           Transcription:
+           ${formattedTranscription}`;
+
         const summaryResponse = await openai.chat.completions.create({
           model: "gpt-4",
           messages: [
@@ -1822,13 +1881,25 @@ Format Rules:
             },
             {
               role: "user",
-              content: `${summaryPrompt}\n${project.transcription}`,
+              content: summaryPrompt,
             },
           ],
         });
 
         // Extract tasks using custom prompt if available
-        const todoPrompt = user.todoPrompt || "Please analyze the following text and extract key tasks and deliverables:\n\n";
+        const todoPrompt = user.todoPrompt || 
+          `Please analyze this transcription and extract specific, actionable tasks:
+           1. Focus on clear, concrete actions that need to be taken
+           2. Include deadlines or time-sensitive items if mentioned
+           3. Highlight dependencies between tasks
+           4. Note any assigned responsibilities
+           5. Prioritize based on urgency/importance if indicated
+
+           Format each task as a clear, actionable item.
+
+           Transcription:
+           ${formattedTranscription}`;
+
         const tasksResponse = await openai.chat.completions.create({
           model: "gpt-4",
           messages: [
@@ -1838,16 +1909,19 @@ Format Rules:
             },
             {
               role: "user",
-              content: `${todoPrompt}\n${project.transcription}`,
+content: todoPrompt,
             },
           ],
         });
 
-        // Update project with summary
+        // Update project with all generated content
         const [updatedProject] = await db
           .update(projects)
           .set({
+            title: generatedTitle,
+            transcription: formattedTranscription,
             summary: summaryResponse.choices[0]?.message?.content || "",
+            updatedAt: new Date(),
           })
           .where(eq(projects.id, projectId))
           .returning();
@@ -1864,6 +1938,7 @@ Format Rules:
                 text: task.trim(),
                 completed: false,
                 createdAt: new Date(),
+                updatedAt: new Date(),
               });
             }
           }
@@ -1897,7 +1972,7 @@ Format Rules:
         }
 
         // Then attempt analysis
-        const analysisResponse = await fetch(`${reqprotocol}://${req.get('host')}/api/projects/${req.params.id}/analyze`, {
+        const analysisResponse = await fetch(`${req.protocol}://${req.get('host')}/api/projects/${req.params.id}/analyze`, {
           method: 'POST',
           headers: {
             'Cookie': req.headers.cookie || '',
