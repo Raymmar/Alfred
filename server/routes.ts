@@ -939,8 +939,7 @@ export function registerRoutes(app: Express): Promise<Server> {
           }
           const [project] = await db.query.projects.findMany({
             where: and(
-              eq(projectsid, projectId),
-              eq(projects.userId, req.user!.id),
+              eq(projectsid, projectId),              eq(projects.userId, req.user!.id),
             ),
             limit: 1,
             with: {
