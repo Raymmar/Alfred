@@ -48,9 +48,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatInterface } from "@/components/ChatInterface";
-import { Progress } from "@/components/ui/progress";
-
-type ProcessingStage = 'recording' | 'transcribing' | 'analyzing' | 'completed' | 'error';
 
 interface ProjectWithTodos extends SelectProject {
   isConverting?: boolean;
@@ -66,8 +63,6 @@ export default function HomePage() {
   const [recordingTime, setRecordingTime] = useState<number>(0);
   const [isSaving, setIsSaving] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [processingStage, setProcessingStage] = useState<ProcessingStage>('recording'); //Added state for processing stage
-
   const recordingTimer = useRef<NodeJS.Timeout>();
   const { startRecording, stopRecording } = useRecorder();
   const { processAudio, isProcessing: isAudioProcessing } = useAudioProcessing();
@@ -187,10 +182,9 @@ export default function HomePage() {
   const handleStopRecording = async () => {
     try {
       setIsSaving(true);
-      setProcessingStage('recording'); // Update processing stage
 
       toast({
-        title: "Saving recording...",
+        title: "Stopping recording...",
         description: "Please wait while we save your recording...",
         duration: 2000,
       });
@@ -198,6 +192,12 @@ export default function HomePage() {
       setIsRecording(false);
       const { filePath } = await stopRecording();
       const currentNoteContent = defaultNoteRef.current;
+
+      toast({
+        title: "Saving recording...",
+        description: "Processing your recording...",
+        duration: 2000,
+      });
 
       const result = await createProject({
         title: `Recording ${new Date().toLocaleString()}`,
@@ -209,35 +209,27 @@ export default function HomePage() {
         throw new Error(result.message);
       }
 
+      setIsProcessing(true);
+
       toast({
-        title: "Recording saved",
-        description: "Starting audio processing...",
+        title: "Processing audio...",
+        description: "Analyzing your recording...",
         duration: 2000,
       });
 
-      setIsProcessing(true);
-      setProcessingStage('transcribing'); // Update processing stage
       const processResult = await processAudio(result.data.id);
 
       if (!processResult.ok) {
-        // Even if processing fails, the recording is saved
-        setProcessingStage('error'); // Update processing stage
-        toast({
-          title: "Processing incomplete",
-          description: `Recording saved but ${processResult.message}. You can try processing again later.`,
-          variant: "destructive",
-        });
-      } else {
-        setProcessingStage('completed'); // Update processing stage
-        toast({
-          title: "Processing complete",
-          description: "Your recording has been fully processed!",
-        });
+        throw new Error(processResult.message);
       }
+
+      toast({
+        title: "Recording complete",
+        description: "Your recording has been saved and processed successfully!",
+      });
 
       defaultNoteRef.current = '';
     } catch (error: any) {
-      setProcessingStage('error'); // Update processing stage
       toast({
         title: "Error",
         description: error.message || "Failed to save recording",
@@ -246,40 +238,6 @@ export default function HomePage() {
     } finally {
       setIsSaving(false);
       setIsProcessing(false);
-    }
-  };
-
-  const getProcessingProgress = (stage: ProcessingStage): number => {
-    switch (stage) {
-      case 'recording':
-        return 25;
-      case 'transcribing':
-        return 50;
-      case 'analyzing':
-        return 75;
-      case 'completed':
-        return 100;
-      case 'error':
-        return 100;
-      default:
-        return 0;
-    }
-  };
-
-  const getProcessingStatusText = (stage: ProcessingStage): string => {
-    switch (stage) {
-      case 'recording':
-        return 'Saving recording...';
-      case 'transcribing':
-        return 'Processing transcript...';
-      case 'analyzing':
-        return 'Extracting insights...';
-      case 'completed':
-        return 'Processing complete';
-      case 'error':
-        return 'Processing error';
-      default:
-        return 'Processing...';
     }
   };
 
@@ -682,17 +640,6 @@ export default function HomePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {(isProcessing || isSaving || isAudioProcessing) && (
-        <div className="absolute inset-x-0 bottom-0 p-4 bg-background/95 border-t shadow-lg">
-          <div className="max-w-md mx-auto space-y-2">
-            <div className="flex justify-between text-sm mb-2">
-              <span>{getProcessingStatusText(processingStage)}</span>
-              <span>{getProcessingProgress(processingStage)}%</span>
-            </div>
-            <Progress value={getProcessingProgress(processingStage)} className="w-full" />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
