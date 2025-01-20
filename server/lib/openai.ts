@@ -42,7 +42,6 @@ function convertMarkdownToHTML(markdown: string): string {
     return html;
   } catch (error) {
     console.error('Error converting markdown to HTML:', error);
-    // If conversion fails, return minimal HTML wrapper
     return `<p>${markdown}</p>`;
   }
 }
@@ -342,9 +341,12 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
     const assistantResponse = response.choices[0].message.content || "";
     console.log('GPT response:', assistantResponse);
 
-    // Convert markdown response to HTML
-    const htmlResponse = convertMarkdownToHTML(assistantResponse);
-    console.log('Converted HTML response:', htmlResponse);
+    // Only convert to HTML if it's not a todo prompt
+    const finalResponse = promptType === 'todo'
+      ? assistantResponse  // Keep tasks as plain text
+      : convertMarkdownToHTML(assistantResponse); // Convert insights to HTML
+
+    console.log('Final response:', finalResponse);
 
     const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
       const [userMsg] = await tx.insert(chats).values({
@@ -358,7 +360,7 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
       const [assistantMsg] = await tx.insert(chats).values({
         userId,
         role: "assistant",
-        content: htmlResponse, // Store the HTML version
+        content: finalResponse,
         projectId: context?.projectId || null,
         timestamp: new Date(),
       }).returning();
@@ -375,12 +377,12 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
       createEmbedding({
         contentType: 'chat',
         contentId: assistantMessage.id,
-        contentText: htmlResponse, // Use HTML version for embedding
+        contentText: finalResponse,
       })
     ]);
 
     return {
-      message: htmlResponse, // Return HTML version
+      message: finalResponse,
       context: {
         similarityScore,
         contextCount: enhancedContext.length,
