@@ -163,7 +163,7 @@ const EditorToolbar = ({ editor }: { editor: Editor | null }) => {
           variant="ghost"
           size="sm"
           className={cn("h-8 px-2", editor.isActive("taskList") && "bg-accent")}
-          onClick={() => editor.chain().focus().toggleTaskList().run()}
+          onClick={() => editor.chain().focus().toggleList('taskList').run()}
         >
           <CheckSquare className="h-4 w-4" />
         </Button>
@@ -271,10 +271,10 @@ export function NoteEditor({
       Subscript,
       Superscript,
       TaskList.configure({
+        itemTypeName: 'taskItem',
         HTMLAttributes: {
           class: 'not-prose pl-2',
         },
-        itemTypeName: 'taskItem',
       }),
       TaskItem.configure({
         nested: true,
