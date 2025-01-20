@@ -77,8 +77,9 @@
 
 .ProseMirror li,
 .prose li {
-  margin: 0.05rem 0 !important;
+  margin: 0 !important;
   padding: 0 !important;
+  line-height: 1.5 !important;
   font-size: 1.125rem !important;
 }
 
@@ -87,6 +88,11 @@
   margin: 0 0 0.75rem 0 !important;
   line-height: 1.5 !important;
   font-size: 1.125rem !important;
+}
+
+.ProseMirror li p,
+.prose li p {
+  margin: 0 !important;
 }
 
 /* Reset any additional prose margins */
