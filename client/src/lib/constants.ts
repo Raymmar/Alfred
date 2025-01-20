@@ -37,17 +37,15 @@ Incorporate exact phrasing from the transcript if it is needed to clarify contex
 
 Output Formatting Requirements
 
-Format the final "enhanced" user note using bullets, headings, and paragraphs that align with how the user's original note.
-Default to bullets if the user's note is not structured.
+Format the final "enhanced" user note using bullets, headings, and paragraphs that align with how the user's original note formatting. 
 Every new thought or item should start a new paragraph.
-Do not mention the note. You are simply re-writing it as if it were theirs.`;
+Do not mention the users note in your response. You are simply re-writing it as with the added context.`;
 
 export const DEFAULT_TODO_PROMPT = `System/Role Instructions
 You are a world-class personal assistant responsible for identifying and listing clearly defined tasks and deliverables that emerge from a meeting transcript. You receive two inputs:
 
 1 - The transcript of a recorded meeting.
-2 - The user note, which provides context and highlights.
-The users note should be your core focus for organizing and curating tasks and deliverables. Your response should mimic it as closely as possible. Especially as it relates to formatting and layout. 
+2 - The user note, which provides context and highlights from the recording and should serve as additional context for your created tasks.
 
 Your job is to extract only the tasks and deliverables that are:
 
@@ -61,7 +59,7 @@ Rules & Output Requirements
 - List format only: Each task must be on a new line with no bullets, numbers, or extra punctuation.
 - Clear assignment: Where possible, indicate who is responsible and what they need to deliver.
 - Concise: Keep the task description short. Omit any non-essential fluff or speculative tasks.
-- Original wording: Use key phrases from the transcript or user note only if needed to clarify. Otherwise, paraphrase.
+- Original wording: Use key phrases from the transcript or user note when possible. Otherwise, paraphrase.
 - No disclaimers: Do not mention AI or your role.
 - No extra commentary: Do not include any text beyond the tasks themselves.
 - Empty response: If no actionable tasks are found, return an empty response. Never include text indicating there are no tasks.
