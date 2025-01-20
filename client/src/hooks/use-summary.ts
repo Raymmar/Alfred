@@ -27,30 +27,37 @@ export function useSummary({ projectId }: UseSummaryProps) {
       if (!response.ok) {
         throw new Error('Failed to fetch project');
       }
-      return response.json();
+      const data = await response.json();
+      return data;
     },
     enabled: !!projectId,
     staleTime: Infinity,
   });
 
-  // Update content when project data changes
+  // Update content when project data changes, ensuring HTML format
   useEffect(() => {
     if (project?.summary) {
-      setContent(project.summary);
+      // If the content doesn't look like HTML (no tags), wrap it in paragraph tags
+      const content = project.summary;
+      const hasHtmlTags = /<[a-z][\s\S]*>/i.test(content);
+      setContent(hasHtmlTags ? content : `<p>${content}</p>`);
     }
   }, [project]);
 
-  // Save mutation with array queryKey format
+  // Save mutation with array queryKey format and HTML preservation
   const { mutateAsync: saveSummary } = useMutation({
     mutationFn: async (content: string) => {
       if (!projectId) {
         throw new Error('No project ID provided');
       }
 
+      // Ensure the content is properly formatted as HTML
+      const formattedContent = content.trim();
+
       const response = await fetch(`/api/projects/${projectId}/summary`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ summary: content }),
+        body: JSON.stringify({ summary: formattedContent }),
       });
 
       if (!response.ok) {
@@ -61,7 +68,6 @@ export function useSummary({ projectId }: UseSummaryProps) {
     },
     onSuccess: () => {
       if (projectId) {
-        // Use array format for invalidation
         queryClient.invalidateQueries({
           queryKey: ['projects', projectId],
         });
@@ -69,7 +75,7 @@ export function useSummary({ projectId }: UseSummaryProps) {
     },
   });
 
-  // Debounced save handler
+  // Debounced save handler with HTML format preservation
   const handleContentChange = useCallback((newContent: string) => {
     setContent(newContent);
     setIsSaving(true);

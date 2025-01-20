@@ -306,16 +306,35 @@ export function NoteEditor({
   const summaryEditor = useEditor({
     extensions: [
       ...baseExtensions,
+      CodeBlockLowlight.configure({
+        lowlight,
+        HTMLAttributes: {
+          class: 'rounded-md bg-muted p-4',
+        }
+      }),
       Placeholder.configure({
         placeholder: "Edit insights and summary...",
       }),
-      BulletList,
-      OrderedList,
+      BulletList.configure({
+        HTMLAttributes: {
+          class: 'list-disc list-inside',
+        }
+      }),
+      OrderedList.configure({
+        HTMLAttributes: {
+          class: 'list-decimal list-inside',
+        }
+      }),
     ],
     content: summaryContent,
     onUpdate: ({ editor }) => {
       const html = editor.getHTML();
       setSummaryContent(html);
+    },
+    editorProps: {
+      attributes: {
+        class: 'prose prose-sm sm:prose lg:prose-lg xl:prose-2xl mx-auto focus:outline-none',
+      },
     },
   });
 
