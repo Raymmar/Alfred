@@ -147,7 +147,7 @@ export async function cleanupEmptyTasks(projectId: number): Promise<void> {
   }
 }
 
-// the newest OpenAI model is "gpt-4o" which was released May 13, 2024
+// the newest OpenAI model is "gpt-4o" which was released May 13, 2024. do not change this unless explicitly requested by the user
 const CHAT_MODEL = "gpt-4o";
 
 interface ChatOptions {
@@ -204,10 +204,10 @@ export async function createChatCompletion({
   });
 
   // Select the appropriate prompt based on the promptType
-  const basePrompt = promptType === 'todo' 
-    ? todoPrompt 
+  const basePrompt = promptType === 'todo'
+    ? todoPrompt
     : promptType === 'primary'
-      ? primaryPrompt 
+      ? primaryPrompt
       : systemPrompt;
 
   // Build system message with enhanced contextual awareness and selected prompt
