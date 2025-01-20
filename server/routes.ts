@@ -688,7 +688,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Ensure storage directory exists with proper permissions
         const recordingsDir = await ensureStorageDirectory();
         console.log('Storage directory ready:', recordingsDir);
-
         const form = formidable({
           uploadDir: recordingsDir,
           keepExtensions: true,
@@ -699,28 +698,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
               mimetype: part.mimetype,
               originalFilename: part.originalFilename,
             });
-
             // Accept both general audio and specific webm types
             const isValidType = part.mimetype.includes('audio/') || 
                               part.mimetype === 'audio/webm' ||
                               part.mimetype === 'audio/webm;codecs=opus';
-
             if (!isValidType) {
               console.warn('Invalid mime type:', part.mimetype);
               return false;
             }
-
             return true;
           }
         });
-
         console.log('Starting file upload processing');
         const [fields, files] = await form.parse(req);
         console.log('Form parse complete:', { 
           fieldKeys: Object.keys(fields),
           filesReceived: files ? Object.keys(files) : 'none'
         });
-
         const file = files.recording?.[0];
         if (!file) {
           console.error('No recording file provided in request');
@@ -729,30 +723,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
             details: "The upload request must include a file named 'recording'"
           });
         }
-
         console.log('Received file:', {
           originalName: file.originalFilename,
           newName: file.newFilename,
           size: file.size,
           type: file.mimetype
         });
-
         // Get additional chunk information from the request
         const isLastChunk = fields.isLastChunk?.[0] === 'true';
         const previousChunks = fields.previousChunks?.[0] 
           ? JSON.parse(fields.previousChunks[0] as string) 
           : [];
-
         // If this is part of a chunked upload
         if (previousChunks.length > 0 || !isLastChunk) {
           console.log('Processing chunked upload:', {
             isLastChunk,
             previousChunksCount: previousChunks.length
           });
-
           // Add current chunk to the list
           const allChunks = [...previousChunks, file.newFilename];
-
           // If this is the last chunk, reassemble all chunks
           if (isLastChunk) {
             try {
@@ -767,11 +756,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
               });
             }
           }
-
           // If not the last chunk, just return the current filename
           return res.json({ filename: file.newFilename });
         }
-
         // Single file upload (small recordings)
         if (!file.size || file.size === 0) {
           console.error('Empty recording file received');
@@ -783,19 +770,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             details: "The uploaded recording file is empty"
           });
         }
-
         // Set proper file permissions
         await fs.promises.chmod(file.filepath, 0o666);
-
         console.log('Successfully saved recording:', {
           filename: file.newFilename,
           size: file.size,
           type: file.mimetype,
           path: file.filepath
         });
-
         return res.json({ filename: file.newFilename });
-
       } catch (error: any) {
         console.error('Error handling file upload:', error);
         res.status(500).json({
@@ -1086,71 +1069,279 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
     app.post("/api/projects/:id/process", requireAuth, async (req: AuthRequest, res: Response) => {
+      let mp3FilePath: string | undefined;
+
       try {
         const projectId = parseInt(req.params.id);
-        console.log('Processing project:', projectId);
+        if (isNaN(projectId)) {
+          return res.status(400).json({ message: "Invalid project ID" });
+        }
 
-        // Get the project with its current transcript
         const [project] = await db.query.projects.findMany({
           where: and(
             eq(projects.id, projectId),
             eq(projects.userId, req.user!.id)
           ),
-          limit: 1
+          limit: 1,
+          with: {
+            note: true,
+          },
         });
 
         if (!project) {
           return res.status(404).json({ message: "Project not found" });
         }
 
-        if (!project.transcription) {
-          return res.status(400).json({ message: "No transcription available to process" });
+        if (!project.recordingUrl) {
+          return res.status(400).json({ message: "No recording file associated with this project" });
         }
 
-        console.log('Processing transcript for project:', {
-          projectId,
-          transcriptLength: project.transcription.length,
-          timestamp: new Date().toISOString()
+        const [user] = await db.query.users.findMany({
+          where: eq(users.id, req.user!.id),
+          limit: 1,
         });
 
-        // Your existing task extraction logic here
-        // Make sure to pass the project's transcription to your AI processing
-
-        // After extracting tasks, validate each one
-        if (project.todos) {
-          const validatedTodos = [];
-
-          for (const todo of project.todos) {
-            // Skip empty or invalid tasks
-            if (!todo || typeof todo.text !== 'string' || isEmptyTaskResponse(todo.text)) {
-              console.log('Task skipped - empty or invalid:', todo);
-              continue;
-            }
-
-            // Skip duplicate tasks
-            if (await isDuplicateTask(todo.text, projectId)) {
-              console.log('Task skipped - duplicate:', todo.text);
-              continue;
-            }
-
-            validatedTodos.push(todo);
-          }
-
-          project.todos = validatedTodos;
-          console.log(`Validated ${validatedTodos.length} tasks from transcript`);
+        if (!user.openaiApiKey) {
+          return res.status(400).json({ message: "OpenAI API key not set" });
         }
 
-        // Clean up any empty tasks that might have been created
+        const openai = new OpenAI({ apiKey: user.openaiApiKey });
+        const recordingPath = path.join(RECORDINGS_DIR, project.recordingUrl);
+
+        try {
+          await fs.promises.access(recordingPath, fs.constants.R_OK);
+        } catch (error) {
+          console.error("Recording file access error:", error);
+          return res.status(404).json({
+            message: "Recording file not found or not accessible",
+          });
+        }
+
+        // Convert to MP3 for Whisper
+        mp3FilePath = path.join(RECORDINGS_DIR, `temp_${Date.now()}.mp3`);
+        await new Promise<void>((resolve, reject) => {
+          const ffmpeg = spawn("ffmpeg", [
+            "-i", recordingPath,
+            "-vn",
+            "-acodec", "libmp3lame",
+            "-ab", "128k",
+            "-ar", "44100",
+            "-af", "silenceremove=1:0:-50dB",
+            "-y",
+            mp3FilePath,
+          ]);
+
+          ffmpeg.on("error", (error) => {
+            console.error("FFmpeg process error:", error);
+            reject(new Error(`FFmpeg process failed: ${error.message}`));
+          });
+
+          ffmpeg.stdout.on("data", (data) => {
+            console.log("FFmpeg stdout:", data.toString());
+          });
+
+          ffmpeg.stderr.on("data", (data) => {
+            console.log("FFmpeg stderr:", data.toString());
+          });
+
+          ffmpeg.on("close", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`FFmpeg process exited with code ${code}`));
+          });
+        });
+
+        // Get transcription
+        console.log("Starting Whisper transcription");
+        const transcriptionResponse = await openai.audio.transcriptions.create({
+          file: fs.createReadStream(mp3FilePath),
+          model: "whisper-1",
+        });
+
+        if (!transcriptionResponse.text) {
+          throw new Error("No transcription received from OpenAI");
+        }
+
+        console.log("Transcription successful, length:", transcriptionResponse.text.length);
+
+        // Format transcript with timestamps
+        const formattingResponse = await openai.chat.completions.create({
+          model: "gpt-4",
+          messages: [
+            {
+              role: "system",
+              content: `Format the transcript with only these elements:
+1. Chapter Headers:
+   - Identify key topic changes and sections
+   - Format as: "# Topic Title [HH:MM:SS.mmm]"
+   - Place at natural topic transitions
+
+2. Regular Timestamps:
+   - Add timestamps [HH:MM:SS.mmm] every 10-30 seconds
+   - Place at natural speech breaks
+   - Keep timestamps sequential
+
+Format Rules:
+- Be sure to send back all of the text
+- Always start at the beginning of the recording at 00:00:00
+- Each timestamp must be in [HH:MM:SS.mmm] format
+- Begin with a chapter header
+- Do not add intro or additional formatting
+- Add timestamps every 10-30 seconds
+- Preserve original text content exactly`,
+            },
+            {
+              role: "user",
+              content: transcriptionResponse.text,
+            },
+          ],
+          temperature: 0.3,
+          max_tokens: 4000,
+        });
+
+        if (!formattingResponse.choices[0]?.message?.content) {
+          throw new Error("No formatted transcript generated");
+        }
+
+        const formattedTranscript = formattingResponse.choices[0].message.content.trim();
+
+        // Generate title
+        const titleResponse = await openai.chat.completions.create({
+          model: "gpt-4",
+          messages: [
+            {
+              role: "system",
+              content: "Generate a clear, concise title (max 60 chars) based on the transcript content. Do not insert any additional formatting or punctuation",
+            },
+            {
+              role: "user",
+              content: formattedTranscript,
+            },
+          ],
+          temperature: 0.7,
+          max_tokens: 60,
+        });
+
+        if (!titleResponse.choices[0]?.message?.content) {
+          throw new Error("No title generated");
+        }
+
+        const title = titleResponse.choices[0].message.content.trim();
+
+        // Generate summary
+        const summaryResponse = await openai.chat.completions.create({
+          model: "gpt-4",
+          messages: [
+            {
+              role: "system",
+              content: user.defaultPrompt || `Provide a clear and concise summary of the key points discussed in this recording. Focus on the main ideas, decisions, and important details.`,
+            },
+            {
+              role: "user",
+              content: formattedTranscript,
+            },
+          ],
+          temperature: 0.7,
+          max_tokens: 1000,
+        });
+
+        if (!summaryResponse.choices[0]?.message?.content) {
+          throw new Error("No summary generated");
+        }
+
+        const summary = summaryResponse.choices[0].message.content.trim();
+
+        // Task extraction with improved validation
+        const taskResponse = await openai.chat.completions.create({
+          model: "gpt-4",
+          messages: [
+            {
+              role: "system",
+              content: user.todoPrompt || `Extract clear, actionable tasks from this transcript. Each task should be:
+- Specific and clear
+- Start with an action verb
+- Be self-contained (understandable without context)
+- Not duplicate existing tasks
+
+If no clear tasks are mentioned, respond with "No tasks identified."
+
+Format each task on a new line.`,
+            },
+            {
+              role: "user",
+              content: formattedTranscript,
+            },
+          ],
+          temperature: 0.5,
+          max_tokens: 1000,
+        });
+
+        if (!taskResponse.choices[0]?.message?.content) {
+          throw new Error("No task list generated");
+        }
+
+        const taskContent = taskResponse.choices[0].message.content.trim();
+
+        // Only process tasks if we have valid content
+        if (!isEmptyTaskResponse(taskContent)) {
+          const tasks = taskContent
+            .split('\n')
+            .map(line => line.trim())
+            .filter(async line => {
+              if (!line || isEmptyTaskResponse(line)) {
+                console.log('Task filtered - empty or invalid:', line);
+                return false;
+              }
+
+              if (await isDuplicateTask(line, projectId)) {
+                console.log('Task filtered - duplicate:', line);
+                return false;
+              }
+
+              return true;
+            })
+            .map(task => ({
+              text: task,
+              projectId,
+              completed: false,
+              order: 0,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            }));
+
+          if (tasks.length > 0) {
+            console.log(`Adding ${tasks.length} validated tasks`);
+            await db.insert(todos).values(tasks);
+          }
+        }
+
+        // Update project with processed information
+        const [updatedProject] = await db.update(projects)
+          .set({
+            title,
+            transcription: formattedTranscript,
+            summary,
+            updatedAt: new Date(),
+          })
+          .where(eq(projects.id, projectId))
+          .returning();
+
+        // Clean up any empty tasks
         await cleanupEmptyTasks(projectId);
 
-        res.json(project);
+        res.json(updatedProject);
 
-      } catch (error: any) {
-        console.error('Project processing error:', error);
+      } catch (error) {
+        console.error("Processing error:", error);
         res.status(500).json({
-          message: "Failed to process project",
-          error: error.message
+          message: "Failed to process recording",
+          error: error instanceof Error ? error.message : String(error),
         });
+      } finally {
+        // Cleanup temporary MP3 file
+        if (mp3FilePath && fs.existsSync(mp3FilePath)) {
+          await fs.promises.unlink(mp3FilePath)
+            .catch(err => console.error("Failed to clean up temporary MP3 file:", err));
+        }
       }
     });
 
