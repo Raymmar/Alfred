@@ -110,6 +110,57 @@ async function isDuplicateTask(text: string, projectId: number): Promise<boolean
   });
 }
 
+// Add this helper function after isDuplicateTask
+async function reassembleChunkedRecording(chunks: string[], isLastChunk: boolean, recordingsDir: string): Promise<string> {
+  if (!chunks || chunks.length === 0) {
+    throw new Error('No chunks provided for reassembly');
+  }
+
+  try {
+    // Generate final filename
+    const timestamp = Date.now();
+    const finalFilename = `recording-${timestamp}-complete.webm`;
+    const finalPath = path.join(recordingsDir, finalFilename);
+
+    // Create write stream for final file
+    const writeStream = fs.createWriteStream(finalPath);
+
+    // Process each chunk in order
+    for (const chunkFilename of chunks) {
+      const chunkPath = path.join(recordingsDir, chunkFilename);
+
+      // Check if chunk exists
+      if (!fs.existsSync(chunkPath)) {
+        throw new Error(`Chunk file not found: ${chunkFilename}`);
+      }
+
+      // Read chunk and append to final file
+      const chunkData = await fs.promises.readFile(chunkPath);
+      writeStream.write(chunkData);
+
+      // Clean up chunk file
+      if (isLastChunk) {
+        await fs.promises.unlink(chunkPath).catch(err => 
+          console.warn('Failed to cleanup chunk:', chunkFilename, err)
+        );
+      }
+    }
+
+    // Close the write stream
+    await new Promise((resolve, reject) => {
+      writeStream.end(err => {
+        if (err) reject(err);
+        else resolve(null);
+      });
+    });
+
+    return finalFilename;
+  } catch (error) {
+    console.error('Error reassembling chunks:', error);
+    throw error;
+  }
+}
+
 // Helper function to clean up empty tasks
 async function cleanupEmptyTasks(projectId: number): Promise<void> {
   const emptyTasks = await db.query.todos.findMany({
@@ -637,25 +688,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Ensure storage directory exists with proper permissions
         const recordingsDir = await ensureStorageDirectory();
         console.log('Storage directory ready:', recordingsDir);
+
         const form = formidable({
           uploadDir: recordingsDir,
           keepExtensions: true,
           maxFileSize: 300 * 1024 * 1024, // 300MB max for each chunk
-          filter: ({ mimetype, originalFilename, size }) => {
-            console.log('Filtering upload:', { mimetype, originalFilename, size });
+          filter: (part) => {
+            if (!part.mimetype) return false;
+            console.log('Filtering upload:', {
+              mimetype: part.mimetype,
+              originalFilename: part.originalFilename,
+            });
+
             // Accept both general audio and specific webm types
-            const isValidType = mimetype?.includes('audio/') || 
-                                mimetype === 'audio/webm' ||
-                                mimetype === 'audio/webm;codecs=opus';
+            const isValidType = part.mimetype.includes('audio/') || 
+                              part.mimetype === 'audio/webm' ||
+                              part.mimetype === 'audio/webm;codecs=opus';
 
             if (!isValidType) {
-              console.warn('Invalid mime type:', mimetype);
-              return false;
-            }
-
-            // Basic size validation during filter
-            if (size === 0) {
-              console.warn('Empty file detected during filter');
+              console.warn('Invalid mime type:', part.mimetype);
               return false;
             }
 
@@ -722,7 +773,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         // Single file upload (small recordings)
-        if (file.size === 0) {
+        if (!file.size || file.size === 0) {
           console.error('Empty recording file received');
           await fs.promises.unlink(file.filepath).catch(err => 
             console.error('Failed to cleanup empty file:', err)
@@ -909,8 +960,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
     app.post("/api/projects", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          const { title, description, recordingUrl, initialNoteContent } = req.body;
+        try {          const { title, description, recordingUrl, initialNoteContent } = req.body;
           const [project] = await db.transaction(async (tx) => {
             const [newProject] = await tx
               .insert(projects)
