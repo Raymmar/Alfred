@@ -265,6 +265,68 @@ async function processTranscriptionInChunks(transcription: string, openai: OpenA
   return chunkSummaries;
 }
 
+async function formatTranscriptWithTimestamps(transcription: string, openai: OpenAI) {
+  console.log('Formatting transcript with timestamps');
+
+  const formattingResponse = await openai.chat.completions.create({
+    model: "gpt-4-1106-preview",
+    messages: [
+      {
+        role: "system",
+        content: `Format the transcript with only these elements:
+1. Chapter Headers:
+   - Identify key topic changes and sections
+   - Format as: "# Topic Title [HH:MM:SS.mmm]"
+   - Place at natural topic transitions
+2. Regular Timestamps:
+   - Add timestamps [HH:MM:SS.mmm] every 10-30 seconds
+   - Place at natural speech breaks
+   - Keep timestamps sequential
+
+Format Rules:
+- Be sure to send back all of the text
+- Always start at the beginning of the recording at [00:00:00.000]
+- Each timestamp must be in [HH:MM:SS.mmm] format
+- Begin with a chapter header
+- Do not add intro or additional formatting
+- Add timestamps every 10-30 seconds
+- Preserve original text content exactly`
+      },
+      {
+        role: "user",
+        content: transcription
+      }
+    ],
+    temperature: 0.3,
+    max_tokens: MAX_TOKENS_OUTPUT
+  });
+
+  return formattingResponse.choices[0]?.message?.content?.trim() || transcription;
+}
+
+async function generateTitle(formattedTranscript: string, openai: OpenAI) {
+  console.log('Generating title from transcript');
+
+  const titleResponse = await openai.chat.completions.create({
+    model: "gpt-4-1106-preview",
+    messages: [
+      {
+        role: "system",
+        content: "Generate a clear, concise title (max 60 chars) based on the transcript content. Do not insert any additional formatting or punctuation"
+      },
+      {
+        role: "user",
+        content: formattedTranscript
+      }
+    ],
+    temperature: 0.7,
+    max_tokens: 60
+  });
+
+  return titleResponse.choices[0]?.message?.content?.trim() || "Untitled Recording";
+}
+
+
 export function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
 
@@ -875,7 +937,7 @@ export function registerRoutes(app: Express): Promise<Server> {
         });
         res.json(userProjects);
       });
-    app.get("/api/projects/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+    app.get("/api/projects/:id", requireAuth, async(req: AuthRequest, res: Response) => {
         const [project] = await db.query.projects.findMany({
           where: eq(projects.id, parseInt(req.params.id)),
           limit: 1,
@@ -939,7 +1001,8 @@ export function registerRoutes(app: Express): Promise<Server> {
           }
           const [project] = await db.query.projects.findMany({
             where: and(
-              eq(projectsid, projectId),              eq(projects.userId, req.user!.id),
+              eq(projects.id, projectId),
+              eq(projects.userId, req.user!.id),
             ),
             limit: 1,
             with: {
@@ -1130,7 +1193,8 @@ export function registerRoutes(app: Express): Promise<Server> {
           }
           const [updatedProject] = await db
             .update(projects)
-            .set({ title: title.trim() })            .where(eq(projects.id, projectId))
+            .set({ title: title.trim() })
+            .where(eq(projects.id, projectId))
             .returning();
           res.json(updatedProject);
         } catch(error: any) {
@@ -1144,6 +1208,8 @@ export function registerRoutes(app: Express): Promise<Server> {
     const processingStart = Date.now();
 
     app.post("/api/projects/:projectId/process", requireAuth, async (req: AuthRequest, res: Response) => {
+      const processingStart = Date.now();
+
       try {
         const projectId = parseInt(req.params.projectId);
         if (isNaN(projectId)) {
@@ -1152,6 +1218,7 @@ export function registerRoutes(app: Express): Promise<Server> {
 
         console.log('Starting project processing:', { projectId, timestamp: new Date().toISOString() });
 
+        // Get project and verify ownership
         const [project] = await db.query.projects.findMany({
           where: eq(projects.id, projectId),
           limit: 1,
@@ -1165,7 +1232,7 @@ export function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Not authorized" });
         }
 
-        // Get user's OpenAI API key
+        // Get user's OpenAI API key and custom prompts
         const [user] = await db.query.users.findMany({
           where: eq(users.id, req.user!.id),
           limit: 1,
@@ -1182,7 +1249,7 @@ export function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: "No recording URL found" });
         }
 
-        // Get recordings directory synchronously
+        // Get recordings directory and verify file
         const recordingsDir = getRecordingsPath();
         const recordingPath = path.join(recordingsDir, project.recordingUrl);
 
@@ -1203,6 +1270,7 @@ export function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Recording file not found" });
         }
 
+        // 1. Get transcription
         console.log('Starting Whisper transcription');
         const transcription = await transcribeAudio(recordingPath, apiKey);
         console.log('Transcription successful:', {
@@ -1210,27 +1278,33 @@ export function registerRoutes(app: Express): Promise<Server> {
           estimatedTokens: Math.ceil(transcription.length / 4)
         });
 
-        // Update project with transcription
-        await db.update(projects)
-          .set({ transcription })
-          .where(eq(projects.id, projectId));
-
-        // Process transcription in chunks
+        // 2. Format transcript with timestamps and chapters
         const openai = new OpenAI({ apiKey });
-        const chunkSummaries = await processTranscriptionInChunks(transcription, openai);
+        const formattedTranscript = await formatTranscriptWithTimestamps(transcription, openai);
+        console.log('Transcript formatted with timestamps');
 
-        // Combine chunk summaries
+        // 3. Generate title
+        const title = await generateTitle(formattedTranscript, openai);
+        console.log('Title generated:', title);
+
+        // 4. Process transcription in chunks for summary
+        const chunkSummaries = await processTranscriptionInChunks(formattedTranscript, openai);
+
+        // 5. Combine summaries using custom system prompt if available
         console.log('Combining summaries:', {
           chunks: chunkSummaries.length,
           totalLength: chunkSummaries.join('\n\n').length
         });
+
+        const systemPrompt = user.systemPrompt || 
+          "Combine these summaries into a coherent final summary. Maintain a clear narrative flow and highlight the most important points and action items.";
 
         const combinedSummary = await openai.chat.completions.create({
           model: "gpt-4-1106-preview",
           messages: [
             {
               role: "system",
-              content: "Combine these summaries into a coherent final summary. Maintain a clear narrative flow and highlight the most important points and action items."
+              content: systemPrompt
             },
             {
               role: "user",
@@ -1244,14 +1318,17 @@ export function registerRoutes(app: Express): Promise<Server> {
         const summary = combinedSummary.choices[0].message.content || "";
         console.log('Summary generated:', { length: summary.length });
 
-        // Extract tasks
+        // 6. Extract tasks using custom todo prompt if available
         console.log('Extracting tasks from summary');
+        const todoPrompt = user.todoPrompt || 
+          "Extract clear, actionable tasks from this summary. Format each task on a new line starting with '- '. Only include concrete, specific tasks.";
+
         const taskResponse = await openai.chat.completions.create({
           model: "gpt-4-1106-preview",
           messages: [
             {
               role: "system",
-              content: "Extract clear, actionable tasks from this summary. Format each task on a new line starting with '- '. Only include concrete, specific tasks."
+              content: todoPrompt
             },
             {
               role: "user",
@@ -1271,12 +1348,17 @@ export function registerRoutes(app: Express): Promise<Server> {
 
         console.log('Tasks extracted:', { count: taskList.length });
 
-        // Update project with summary
+        // 7. Update project with all processed information
         await db.update(projects)
-          .set({ summary })
+          .set({
+            title,
+            transcription: formattedTranscript,
+            summary,
+            updatedAt: new Date()
+          })
           .where(eq(projects.id, projectId));
 
-        // Create tasks
+        // 8. Create tasks
         let tasksCreated = 0;
         for (const taskText of taskList) {
           if (!isEmptyTaskResponse(taskText) && !(await isDuplicateTask(taskText, projectId))) {
@@ -1290,10 +1372,10 @@ export function registerRoutes(app: Express): Promise<Server> {
           }
         }
 
-        // Clean up any empty tasks
+        // 9. Clean up any empty tasks
         await cleanupEmptyTasks(projectId);
 
-        // Get updated project with todos
+        // 10. Get updated project with todos
         const [updatedProject] = await db.query.projects.findMany({
           where: eq(projects.id, projectId),
           limit: 1,
@@ -1308,7 +1390,7 @@ export function registerRoutes(app: Express): Promise<Server> {
         console.log('Processing completed:', {
           projectId,
           duration: processingDuration,
-          transcriptionLength: transcription.length,
+          transcriptionLength: formattedTranscript.length,
           summaryLength: summary.length,
           tasksCreated,
           totalChunks: chunkSummaries.length
