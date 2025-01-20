@@ -82,8 +82,8 @@
   font-size: 1.125rem !important;
 }
 
-.ProseMirror p,
-.prose p {
+.ProseMirror p:not(li p),
+.prose p:not(li p) {
   margin: 0 0 0.75rem 0 !important;
   line-height: 1.5 !important;
   font-size: 1.125rem !important;
