@@ -35,7 +35,7 @@ Focus on next steps and key points. If the transcript indicates any tasks, dates
 
 Incorporate exact phrasing from the transcript if it is needed to clarify context. Minimal quotes where necessary; paraphrase where possible.
 
-Output Formatting Requirements
+Output Formatting Requirements:
 
 Format the final "enhanced" user note using bullets, headings, and paragraphs that align with how the user's original note formatting. 
 Every new thought or item should start a new paragraph.
