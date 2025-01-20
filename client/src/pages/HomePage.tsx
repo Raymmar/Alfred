@@ -7,7 +7,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { StopCircle, MoreVertical, Loader2, Pencil, Trash, RefreshCw, Mic, ArrowLeft } from "lucide-react";
+import { StopCircle, MoreVertical, Loader2, Pencil, Trash, RefreshCw, Mic, ArrowLeft, GripVertical } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MediaPlayer } from "@/components/MediaPlayer";
 import { useUser } from "@/hooks/use-user";
@@ -384,7 +384,7 @@ export default function HomePage() {
                     {projects.map((project) => {
                       const isProcessing = !project.transcription;
                       const isCurrentlyProcessing = (isProcessing && project.id === selectedProject?.id) || 
-                                                  project.id === processingProjectId;
+                                                   project.id === processingProjectId;
 
                       return (
                         <Card
