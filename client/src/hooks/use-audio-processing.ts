@@ -34,7 +34,13 @@ function isEmptyTaskResponse(text: string): boolean {
     "no actions",
     "tasks:",
     "action items:",
-    "deliverables:"
+    "deliverables:",
+    "n/a",
+    "none",
+    "not applicable",
+    "no specific tasks mentioned",
+    "no clear tasks",
+    "not specified"
   ];
 
   // Check exact matches
@@ -50,6 +56,19 @@ function isEmptyTaskResponse(text: string): boolean {
       return true;
     }
     return false;
+  });
+}
+
+// Helper function to detect potential duplicate tasks
+function isDuplicateTask(newTask: string, existingTasks: Array<{ text: string }> = []): boolean {
+  if (!newTask?.trim()) return true;
+
+  const normalizedNewTask = newTask.trim().toLowerCase();
+  return existingTasks.some(task => {
+    const normalizedExistingTask = task.text.trim().toLowerCase();
+    return normalizedExistingTask === normalizedNewTask ||
+           normalizedExistingTask.includes(normalizedNewTask) ||
+           normalizedNewTask.includes(normalizedExistingTask);
   });
 }
 
@@ -71,14 +90,28 @@ async function processAudio(projectId: number): Promise<RequestResult<SelectProj
 
     // Additional validation of tasks in the response
     if (data.todos) {
-      data.todos = data.todos.filter((todo: any) => {
-        if (!todo || typeof todo.text !== 'string') return false;
+      // Get existing tasks for duplicate check
+      const existingTasksResponse = await fetch(`/api/projects/${projectId}/todos`);
+      const existingTasks = await existingTasksResponse.json();
 
-        const shouldKeep = !isEmptyTaskResponse(todo.text);
-        if (!shouldKeep) {
-          console.log('Frontend filtering: Removed empty task response:', todo.text);
+      // Filter out empty and duplicate tasks
+      data.todos = data.todos.filter((todo: any) => {
+        if (!todo || typeof todo.text !== 'string') {
+          console.log('Frontend filtering: Removed invalid task:', todo);
+          return false;
         }
-        return shouldKeep;
+
+        if (isEmptyTaskResponse(todo.text)) {
+          console.log('Frontend filtering: Removed empty task response:', todo.text);
+          return false;
+        }
+
+        if (isDuplicateTask(todo.text, existingTasks)) {
+          console.log('Frontend filtering: Removed duplicate task:', todo.text);
+          return false;
+        }
+
+        return true;
       });
     }
 

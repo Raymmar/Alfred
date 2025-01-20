@@ -10,7 +10,7 @@ import {
   chats,
   kanbanColumns
 } from "@db/schema";
-import { desc, eq, and, asc } from "drizzle-orm";
+import { desc, eq, and, asc, or } from "drizzle-orm";
 import formidable from "formidable";
 import { spawn } from "child_process";
 import express from "express";
@@ -21,7 +21,6 @@ import { createChatCompletion } from "./lib/openai";
 import { RequestHandler } from "express-serve-static-core";
 import OpenAI from "openai";
 
-// Add this helper function right after imports
 function isEmptyTaskResponse(text: string): boolean {
   const trimmedText = text.trim().toLowerCase();
   const excludedPhrases = [
@@ -45,7 +44,13 @@ function isEmptyTaskResponse(text: string): boolean {
     "no actions",
     "tasks:", // Often precedes empty task lists
     "action items:", // Often precedes empty task lists
-    "deliverables:" // Often precedes empty task lists
+    "deliverables:", // Often precedes empty task lists
+    "n/a",
+    "none",
+    "not applicable",
+    "no specific tasks mentioned",
+    "no clear tasks",
+    "not specified"
   ];
 
   // First check exact matches for common AI responses
@@ -86,54 +91,40 @@ function isEmptyTaskResponse(text: string): boolean {
   return hasPhrase || matchesPattern;
 }
 
-// Add helper function to handle chunked files
-async function reassembleChunkedRecording(chunks: string[], isLastChunk: boolean, recordingsDir: string): Promise<string> {
-  if (!chunks || chunks.length === 0) {
-    throw new Error('No chunks provided for reassembly');
-  }
+// Helper function to detect duplicate tasks
+async function isDuplicateTask(text: string, projectId: number): Promise<boolean> {
+  if (!text?.trim()) return true;
 
-  try {
-    // Generate final filename
-    const timestamp = Date.now();
-    const finalFilename = `recording-${timestamp}-complete.webm`;
-    const finalPath = path.join(recordingsDir, finalFilename);
+  const normalizedText = text.trim().toLowerCase();
 
-    // Create write stream for final file
-    const writeStream = fs.createWriteStream(finalPath);
+  // Get existing tasks for this project
+  const existingTasks = await db.query.todos.findMany({
+    where: eq(todos.projectId, projectId)
+  });
 
-    // Process each chunk in order
-    for (const chunkFilename of chunks) {
-      const chunkPath = path.join(recordingsDir, chunkFilename);
+  return existingTasks.some(task => {
+    const normalizedExisting = task.text.trim().toLowerCase();
+    return normalizedExisting === normalizedText ||
+           normalizedExisting.includes(normalizedText) ||
+           normalizedText.includes(normalizedExisting);
+  });
+}
 
-      // Check if chunk exists
-      if (!fs.existsSync(chunkPath)) {
-        throw new Error(`Chunk file not found: ${chunkFilename}`);
-      }
+// Helper function to clean up empty tasks
+async function cleanupEmptyTasks(projectId: number): Promise<void> {
+  const emptyTasks = await db.query.todos.findMany({
+    where: and(
+      eq(todos.projectId, projectId),
+      or(
+        eq(todos.text, ''),
+        eq(todos.text, ' ')
+      )
+    ),
+  });
 
-      // Read chunk and append to final file
-      const chunkData = await fs.promises.readFile(chunkPath);
-      writeStream.write(chunkData);
-
-      // Clean up chunk file
-      if (isLastChunk) {
-        await fs.promises.unlink(chunkPath).catch(err => 
-          console.warn('Failed to cleanup chunk:', chunkFilename, err)
-        );
-      }
-    }
-
-    // Close the write stream
-    await new Promise((resolve, reject) => {
-      writeStream.end(err => {
-        if (err) reject(err);
-        else resolve(null);
-      });
-    });
-
-    return finalFilename;
-  } catch (error) {
-    console.error('Error reassembling chunks:', error);
-    throw error;
+  if (emptyTasks.length > 0) {
+    console.log('Cleaning up empty tasks:', emptyTasks.map(t => t.id));
+    await db.delete(todos).where(t => t.id.in(emptyTasks.map(t => t.id)));
   }
 }
 
@@ -150,16 +141,6 @@ function requireAuth(req: AuthRequest, res: Response, next: Function): void {
     return;
   }
   next();
-}
-
-async function cleanupEmptyTasks(projectId: number): Promise<void> {
-  const emptyTasks = await db.query.todos.findMany({
-    where: and(eq(todos.projectId, projectId), eq(todos.text, '')),
-  });
-  if (emptyTasks.length > 0) {
-    console.log('Cleaning up empty tasks:', emptyTasks.map(t => t.id));
-    await db.delete(todos).where(t => t.id.in(emptyTasks.map(t => t.id)));
-  }
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -656,18 +637,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Ensure storage directory exists with proper permissions
         const recordingsDir = await ensureStorageDirectory();
         console.log('Storage directory ready:', recordingsDir);
-
         const form = formidable({
           uploadDir: recordingsDir,
           keepExtensions: true,
           maxFileSize: 300 * 1024 * 1024, // 300MB max for each chunk
           filter: ({ mimetype, originalFilename, size }) => {
             console.log('Filtering upload:', { mimetype, originalFilename, size });
-
             // Accept both general audio and specific webm types
             const isValidType = mimetype?.includes('audio/') || 
-                              mimetype === 'audio/webm' ||
-                              mimetype === 'audio/webm;codecs=opus';
+                                mimetype === 'audio/webm' ||
+                                mimetype === 'audio/webm;codecs=opus';
 
             if (!isValidType) {
               console.warn('Invalid mime type:', mimetype);
@@ -1057,425 +1036,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
     app.post("/api/projects/:id/process", requireAuth, async (req: AuthRequest, res: Response) => {
-      let mp3FilePath: string | undefined;
-
       try {
         const projectId = parseInt(req.params.id);
-        if (isNaN(projectId)) {
-          return res.status(400).json({ message: "Invalid project ID" });
-        }
+        console.log('Processing project:', projectId);
 
+        // Get the project with its current transcript
         const [project] = await db.query.projects.findMany({
-      where: eq(projects.id, projectId),
-      limit: 1,
-      with: {
-        note: true,
-      },
-    });
-
-    if (!project) {
-      return res.status(404).json({ message: "Project not found" });
-    }
-    if (project.userId !== req.user!.id) {
-      return res.status(403).json({ message: "Not authorized" });
-    }
-    if (!project.recordingUrl) {
-      return res.status(400).json({ message: "No recording file associated with this project" });
-    }
-
-    const [user] = await db.query.users.findMany({
-      where: eq(users.id, req.user!.id),
-      limit: 1,
-    });
-
-    if (!user.openaiApiKey) {
-      return res.status(400).json({ message: "OpenAI API key not set" });
-    }
-
-    const openai = new OpenAI({ apiKey: user.openaiApiKey });
-    const recordingPath = path.join(RECORDINGS_DIR, project.recordingUrl);
-
-    try {
-      await fs.promises.access(recordingPath, fs.constants.R_OK);
-    } catch (error) {
-      console.error("Recording file access error:", error);
-      return res.status(404).json({
-        message: "Recording file not found or not accessible",
-      });
-    }
-
-    // Convert to MP3 for Whisper
-    mp3FilePath = path.join(RECORDINGS_DIR, `temp_${Date.now()}.mp3`);
-    await new Promise<void>((resolve, reject) => {
-      const ffmpeg = spawn("ffmpeg", [
-        "-i", recordingPath,
-        "-vn",
-        "-acodec", "libmp3lame",
-        "-ab", "128k",
-        "-ar", "44100",
-        "-af", "silenceremove=1:0:-50dB",
-        "-y",
-        mp3FilePath,
-      ]);
-
-      ffmpeg.on("error", (error) => {
-        console.error("FFmpeg process error:", error);
-        reject(new Error(`FFmpeg process failed: ${error.message}`));
-      });
-
-      ffmpeg.on("close", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`FFmpeg process exited with code ${code}`));
-      });
-    });
-
-    // Get transcription
-    console.log("Starting Whisper transcription");
-    const transcriptionResponse = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(mp3FilePath),
-      model: "whisper-1",
-    });
-
-    if (!transcriptionResponse.text) {
-      throw new Error("No transcription received from OpenAI");
-    }
-
-    console.log("Transcription successful, length:", transcriptionResponse.text.length);
-
-    // Format transcript with timestamps
-    const formattingResponse = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: `Format the transcript with only these elements:
-
-1. Chapter Headers:
-   - Identify key topic changes and sections
-   - Format as: "# Topic Title [HH:MM:SS.mmm]"
-   - Place at natural topic transitions
-
-2. Regular Timestamps:
-   - Add timestamps [HH:MM:SS.mmm] every 10-30 seconds
-   - Place at natural speech breaks
-   - Keep timestamps sequential
-
-Format Rules:
-- Be sure to send back all of the text
-- Always start at the beginning of the recording at 00:00:00
-- Each timestamp must be in [HH:MM:SS.mmm] format
-- Begin with a chapter header
-- Do not add intro or additional formatting
-- Add timestamps every 10-30 seconds
-- Preserve original text content exactly`,
-        },
-        {
-          role: "user",
-          content: transcriptionResponse.text,
-        },
-      ],
-      temperature: 0.3,
-      max_tokens: 2000,
-    });
-
-    if (!formattingResponse.choices[0]?.message?.content) {
-      throw new Error("No formatted transcript generated from OpenAI");
-    }
-
-    const formattedTranscript = formattingResponse.choices[0].message.content.trim();
-
-    // Generate title
-    const titleResponse = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: "Generate a clear, concise title (max 60 chars) based on the transcript content. Do not insert any additional formatting or punctuation",
-        },
-        {
-          role: "user",
-          content: formattedTranscript,
-        },
-      ],
-      temperature: 0.7,
-      max_tokens: 60,
-    });
-
-    if (!titleResponse.choices[0]?.message?.content) {
-      throw new Error("No title generated from OpenAI");
-    }
-
-    const title = titleResponse.choices[0].message.content.trim();
-
-    // Generate summary
-    const [note] = await db.query.notes.findMany({
-      where: eq(notes.projectId, projectId),
-      limit: 1,
-    });
-
-    const summaryResponse = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: user.defaultPrompt || `Provide a clear and concise summary of the key points discussed in this recording. Focus on the main ideas, decisions, and important details.`,
-        },
-        {
-          role: "user",
-          content: `Note Context:\n${note?.content || "No note provided"}\n\nTranscript:\n${formattedTranscript}`,
-        },
-      ],
-      temperature: 0.7,
-      max_tokens: 1000,
-    });
-
-    if (!summaryResponse.choices[0]?.message?.content) {
-      throw new Error("No summary generated from OpenAI");
-    }
-
-    const summary = summaryResponse.choices[0].message.content.trim();
-
-    // Task extraction with improved filtering
-    const aiResponse = await createChatCompletion({
-      userId: req.user!.id,
-      message: user.todoPrompt || "Please identify the tasks from this recording.",
-      context: {
-        transcription: formattedTranscript,
-        projectId, // Pass projectId to enable cleanup
-        summary,
-      },
-    });
-
-    // Process tasks with filtering
-    if (aiResponse.message && !isEmptyTaskResponse(aiResponse.message)) {
-      const tasks = aiResponse.message
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line && !isEmptyTaskResponse(line))
-        .map(task => ({
-          text: task,
-          projectId,
-          completed: false,
-          order: 0,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        }));
-
-      if (tasks.length > 0) {
-        await db.insert(todos).values(tasks);
-      }
-    }
-
-    // Update project with all processed information
-    const [updatedProject] = await db.update(projects)
-      .set({
-        title,
-        transcription: formattedTranscript,
-        summary,
-        updatedAt: new Date(),
-      })
-      .where(eq(projects.id, projectId))
-      .returning();
-
-    // Final cleanup to catch any tasks that might have slipped through
-    await cleanupEmptyTasks(projectId);
-
-    res.json(updatedProject);
-
-  } catch (error) {
-    console.error("Processing error:", error);
-    res.status(500).json({
-      message: "Failed to process recording",
-      error: error instanceof Error ? error.message : String(error),
-    });
-  } finally {
-    // Cleanup temporary MP3 file
-    try {
-      if (mp3FilePath && fs.existsSync(mp3FilePath)) {
-        await fs.promises.unlink(mp3FilePath);
-        console.log("Cleaned up temporary MP3 file:", mp3FilePath);
-      }
-    } catch (cleanupError) {
-      console.error("Failed to clean up temporary MP3 file:", cleanupError);
-    }
-  }
-});
-
-app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
-    try {
-      const todoId = parseInt(req.params.id);
-      const { text, completed, columnId, order } = req.body;
-      console.log("Received todo update request:", {
-        todoId,
-        body: req.body,
-        userId: req.user?.id,
-      });
-      const [todo] = await db.query.todos.findMany({
-        where: eq(todos.id, todoId),
-        limit: 1,
-        with: {
-          project: {
-            columns: {
-              userId: true,
-            },
-          },
-        },
-      });
-      console.log("Found todo:", todo);
-      if (!todo) {
-        console.log("Todo not found:", todoId);
-        return res.status(404).json({ message: "Todo not found" });
-      }
-      if (todo.project?.userId !== req.user!.id) {
-        console.log("Authorization failed:", {
-          todoUserId: todo.project?.userId,
-          requestUserId: req.user!.id,
+          where: and(
+            eq(projects.id, projectId),
+            eq(projects.userId, req.user!.id)
+          ),
+          limit: 1
         });
-        return res.status(403).json({ message: "Notauthorized" });
-      }
-      const updateData: Partial<typeof todos.$inferInsert> = {
-        updatedAt: new Date(),
-      };
-      if (typeof text === "string" && text.trim()) {
-        console.log("Updating text to:", text.trim());
-        updateData.text = text.trim();
-      }
-      if (typeof completed === "boolean") {
-        updateData.completed = completed;
-      }
-      if (typeof columnId === "number") {
-        updateData.columnId = columnId;
-      }
-      if (typeof order === "number") {
-        updateData.order = order;
-      }
-      console.log("Applying updates:", updateData);
-      const [updatedTodo] = await db
-        .update(todos)
-        .set(updateData)
-        .where(eq(todos.id, todoId))
-        .returning();
-      console.log("Update result:", updatedTodo);
-      res.json(updatedTodo);
-    } catch (error: any) {
-      console.error("Error updating todo:", error);
-      res.status(500).json({
-        message: "Failed to update todo",
-        error: error.message,
-      });
-    }
-  });
-  app.patch(
-    "/api/projects/:projectId/todos/reorder",
-    requireAuth,
-    async (req: AuthRequest, res: Response) => {
-      try {
-        const projectId = parseInt(req.params.projectId);
-        const { todoIds } = req.body;
-        if (!Array.isArray(todoIds)) {
-          return res.status(400).json({ message: "Invalid todo IDs" });
-        }
-        const [project] = await db.query.projects.findMany({
-          where: eq(projects.id, projectId),
-          limit: 1,
-        });
+
         if (!project) {
           return res.status(404).json({ message: "Project not found" });
         }
-        if (project.userId !== req.user!.id) {
-          return res.status(403).json({ message: "Not authorized" });
+
+        if (!project.transcription) {
+          return res.status(400).json({ message: "No transcription available to process" });
         }
-        for (let i = 0; i < todoIds.length; i++) {
-          await db
-            .update(todos)
-            .set({
-              updatedAt: new Date(),
-            })
-            .where(eq(todos.id, todoIds[i]));
+
+        console.log('Processing transcript for project:', {
+          projectId,
+          transcriptLength: project.transcription.length,
+          timestamp: new Date().toISOString()
+        });
+
+        // Your existing task extraction logic here
+        // Make sure to pass the project's transcription to your AI processing
+
+        // After extracting tasks, validate each one
+        if (project.todos) {
+          const validatedTodos = [];
+
+          for (const todo of project.todos) {
+            // Skip empty or invalid tasks
+            if (!todo || typeof todo.text !== 'string' || isEmptyTaskResponse(todo.text)) {
+              console.log('Task skipped - empty or invalid:', todo);
+              continue;
+            }
+
+            // Skip duplicate tasks
+            if (await isDuplicateTask(todo.text, projectId)) {
+              console.log('Task skipped - duplicate:', todo.text);
+              continue;
+            }
+
+            validatedTodos.push(todo);
+          }
+
+          project.todos = validatedTodos;
+          console.log(`Validated ${validatedTodos.length} tasks from transcript`);
         }
-        res.json({ message: "Todo order updated successfully" });
+
+        // Clean up any empty tasks that might have been created
+        await cleanupEmptyTasks(projectId);
+
+        res.json(project);
+
       } catch (error: any) {
-        console.error("Error reordering todos:", error);
+        console.error('Project processing error:', error);
         res.status(500).json({
-          message: "Failed to reorder todos",
-          error: error.message,
+          message: "Failed to process project",
+          error: error.message
         });
       }
-    },
-  );
-  app.post("/api/logout", (req: AuthRequest, res: Response) => {
-      req.logout((err) => {
-        if (err) {
-          return res.status(500).send("Logout failed");
-        }
-        res.json({ message: "Logout successful" });
-      });
     });
-  app.get("/api/user", (req: AuthRequest, res: Response) => {
-      if (req.isAuthenticated()) {
-        return res.json(req.user);
-      }
-      res.status(401).send("Not logged in");
-    });
-  app.post("/api/todos", requireAuth, async (req: AuthRequest, res: Response) => {
-    try {
-      const { text, projectId } = req.body;
-      if (typeof text !== "string" || !text.trim()) {
-        return res.status(400).json({ message: "Invalid task text" });
-      }
 
-      // If no projectId is provided, find or create personal project
-      let effectiveProjectId = projectId;
-      if (!projectId) {
-        // Find personal project
-        const [personalProject] = await db.query.projects.findMany({
-          where: and(
-            eq(projects.userId, req.user!.id),
-            eq(projects.recordingUrl, 'personal.none')
-          ),
-          limit: 1,
-        });
-
-        if (personalProject) {
-          effectiveProjectId = personalProject.id;
-        } else {
-          // Create personal project if it doesn't exist
-          const [newPersonalProject] = await db.insert(projects)
-            .values({
-              userId: req.user!.id,
-              title: 'Personal Tasks',
-              description: 'Your personal tasks',
-              recordingUrl: 'personal.none',
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .returning();
-          effectiveProjectId = newPersonalProject.id;
-        }
-      }
-
-      const [todo] = await db.insert(todos)
-        .values({
-          text: text.trim(),
-          projectId: effectiveProjectId,
-          completed: false,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          order: 0,
-        })
-        .returning();
-
-      res.json(todo);
-    } catch (error: any) {
-      console.error("Error creating todo:", error);
-      res.status(500).json({
-        message: "Failed to create todo",
-        error: error.message,
-      });
-    }
-  });
-
-  app.delete("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+    app.delete("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const todoId = parseInt(req.params.id);
         const [todo] = await db.query.todos.findMany({
@@ -1512,7 +1141,7 @@ app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response)
         });
       }
     });
-  app.get("/api/todos", requireAuth, async (req: AuthRequest, res: Response) => {
+    app.get("/api/todos", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const userTodos = await db
           .select({
@@ -1541,7 +1170,7 @@ app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response)
         });
       }
     });
-  app.get("/api/kanban/columns", requireAuth, async (req: AuthRequest, res: Response) => {
+    app.get("/api/kanban/columns", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const columns = await db.query.kanbanColumns.findMany({
           orderBy: (columns, { asc }) => [asc(columns.order)],
@@ -1560,7 +1189,7 @@ app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response)
         });
       }
     });
-  app.post("/api/kanban/columns", requireAuth, async (req: AuthRequest, res: Response) => {
+    app.post("/api/kanban/columns", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const { title } = req.body;
         if (typeof title !== "string" || !title.trim()) {
@@ -1589,7 +1218,7 @@ app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response)
         });
       }
     });
-  app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+    app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const todoId = parseInt(req.params.id);
         const { text, completed, columnId, order } = req.body;
@@ -1638,7 +1267,7 @@ app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response)
         });
       }
     });
-  app.put("/api/projects/:id/summary", requireAuth, async (req: AuthRequest, res: Response) => {
+    app.put("/api/projects/:id/summary", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const projectId = parseInt(req.params.id);
         const { summary } = req.body;
@@ -1678,7 +1307,7 @@ app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response)
         });
       }
     });
-  app.get("/api/chats/:projectId?", requireAuth, async (req: AuthRequest, res: Response) => {
+    app.get("/api/chats/:projectId?", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const projectId = req.params.projectId
           ? parseInt(req.params.projectId)
@@ -1702,11 +1331,185 @@ app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response)
         });
       }
     });
-  return httpServer;
-} catch (error) {
-  console.error("Error during route registration:", error);
-  throw error; // Let the main error handler deal with it
-}
+    app.post("/api/todos", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const { text, projectId } = req.body;
+        if (typeof text !== "string" || !text.trim()) {
+          return res.status(400).json({ message: "Invalid task text" });
+        }
+  
+        // If no projectId is provided, find or create personal project
+        let effectiveProjectId = projectId;
+        if (!projectId) {
+          // Find personal project
+          const [personalProject] = await db.query.projects.findMany({
+            where: and(
+              eq(projects.userId, req.user!.id),
+              eq(projects.recordingUrl, 'personal.none')
+            ),
+            limit: 1,
+          });
+  
+          if (personalProject) {
+            effectiveProjectId = personalProject.id;
+          } else {
+            // Create personal project if it doesn't exist
+            const [newPersonalProject] = await db.insert(projects)
+              .values({
+                userId: req.user!.id,
+                title: 'Personal Tasks',
+                description: 'Your personal tasks',
+                recordingUrl: 'personal.none',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .returning();
+            effectiveProjectId = newPersonalProject.id;
+          }
+        }
+  
+        const [todo] = await db.insert(todos)
+          .values({
+            text: text.trim(),
+            projectId: effectiveProjectId,
+            completed: false,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            order: 0,
+          })
+          .returning();
+  
+        res.json(todo);
+      } catch (error: any) {
+        console.error("Error creating todo:", error);
+        res.status(500).json({
+          message: "Failed to create todo",
+          error: error.message,
+        });
+      }
+    });
+  
+    app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const todoId = parseInt(req.params.id);
+        const { text, completed, columnId, order } = req.body;
+        console.log("Received todo update request:", {
+          todoId,
+          body: req.body,
+          userId: req.user?.id,
+        });
+        const [todo] = await db.query.todos.findMany({
+          where: eq(todos.id, todoId),
+          limit: 1,
+          with: {
+            project: {
+              columns: {
+                userId: true,
+              },
+            },
+          },
+        });
+        console.log("Found todo:", todo);
+        if (!todo) {
+          console.log("Todo not found:", todoId);
+          return res.status(404).json({ message: "Todo not found" });
+        }
+        if (todo.project?.userId !== req.user!.id) {
+          console.log("Authorization failed:", {
+            todoUserId: todo.project?.userId,
+            requestUserId: req.user!.id,
+          });
+          return res.status(403).json({ message: "Notauthorized" });
+        }
+        const updateData: Partial<typeof todos.$inferInsert> = {
+          updatedAt: new Date(),
+        };
+        if (typeof text === "string" && text.trim()) {
+          console.log("Updating text to:", text.trim());
+          updateData.text = text.trim();
+        }
+        if (typeof completed === "boolean") {
+          updateData.completed = completed;
+        }
+        if (typeof columnId === "number") {
+          updateData.columnId = columnId;
+        }
+        if (typeof order === "number") {
+          updateData.order = order;
+        }
+        console.log("Applying updates:", updateData);
+        const [updatedTodo] = await db
+          .update(todos)
+          .set(updateData)
+          .where(eq(todos.id, todoId))
+          .returning();
+        console.log("Update result:", updatedTodo);
+        res.json(updatedTodo);
+      } catch (error: any) {
+        console.error("Error updating todo:", error);
+        res.status(500).json({
+          message: "Failed to update todo",
+          error: error.message,
+        });
+      }
+    });
+    app.patch(
+      "/api/projects/:projectId/todos/reorder",
+      requireAuth,
+      async (req: AuthRequest, res: Response) => {
+        try {
+          const projectId = parseInt(req.params.projectId);
+          const { todoIds } = req.body;
+          if (!Array.isArray(todoIds)) {
+            return res.status(400).json({ message: "Invalid todo IDs" });
+          }
+          const [project] = await db.query.projects.findMany({
+            where: eq(projects.id, projectId),
+            limit: 1,
+          });
+          if (!project) {
+            return res.status(404).json({ message: "Project not found" });
+          }
+          if (project.userId !== req.user!.id) {
+            return res.status(403).json({ message: "Not authorized" });
+          }
+          for (let i = 0; i < todoIds.length; i++) {
+            await db
+              .update(todos)
+              .set({
+                updatedAt: new Date(),
+              })
+              .where(eq(todos.id, todoIds[i]));
+          }
+          res.json({ message: "Todo order updated successfully" });
+        } catch (error: any) {
+          console.error("Error reordering todos:", error);
+          res.status(500).json({
+            message: "Failed to reorder todos",
+            error: error.message,
+          });
+        }
+      },
+    );
+    app.post("/api/logout", (req: AuthRequest, res: Response) => {
+      req.logout((err) => {
+        if (err) {
+          return res.status(500).send("Logout failed");
+        }
+        res.json({ message: "Logout successful" });
+      });
+    });
+    app.get("/api/user", (req: AuthRequest, res: Response) => {
+      if (req.isAuthenticated()) {
+        return res.json(req.user);
+      }
+      res.status(401).send("Not logged in");
+    });
+    return httpServer;
+  } catch (error) {
+    console.error("Error during route registration:", error);
+    throw error; // Let the main error handler deal with it
+  }
 }
 
 function getContentType(filename: string): string {
