@@ -7,7 +7,7 @@ import { findRecommendedTasks } from './embeddings';
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT } from "@/lib/constants";
 import { marked } from 'marked';
 
-// Configure marked for HTML output
+// Configure marked for minimal HTML output
 marked.setOptions({
   gfm: true, // GitHub Flavored Markdown
   breaks: true, // Convert \n to <br>
@@ -19,19 +19,30 @@ marked.setOptions({
 // the newest OpenAI model is "gpt-4o" which was released May 13, 2024
 const CHAT_MODEL = "gpt-4o";
 
-// Helper function to convert markdown to HTML
+// Helper function to convert markdown to HTML with minimal formatting
 function convertMarkdownToHTML(markdown: string): string {
   if (!markdown) return '';
 
   try {
     // Convert markdown to HTML
-    const html = marked(markdown);
+    let html = marked(markdown);
 
-    // Clean up empty paragraphs that might be created
-    return html.replace(/<p>\s*<\/p>/g, '');
+    // Clean up HTML:
+    // 1. Remove any style attributes
+    html = html.replace(/\sstyle="[^"]*"/g, '');
+    // 2. Remove any class attributes
+    html = html.replace(/\sclass="[^"]*"/g, '');
+    // 3. Clean up empty paragraphs
+    html = html.replace(/<p>\s*<\/p>/g, '');
+    // 4. Remove any data attributes
+    html = html.replace(/\sdata-[^=]*="[^"]*"/g, '');
+    // 5. Clean up multiple line breaks
+    html = html.replace(/(\r?\n){2,}/g, '\n');
+
+    return html;
   } catch (error) {
     console.error('Error converting markdown to HTML:', error);
-    // If conversion fails, wrap the original content in a paragraph
+    // If conversion fails, return minimal HTML wrapper
     return `<p>${markdown}</p>`;
   }
 }
