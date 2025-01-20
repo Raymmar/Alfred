@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { db } from "@db";
 import { eq, and } from "drizzle-orm";
 import { settings, users, projects, todos, chats } from "@db/schema";
-import { updateChatContext, createEmbedding } from './embeddings';
+import { createEmbedding } from './embeddings';
 
 // Task filtering functions - used by routes.ts only
 export function isEmptyTaskResponse(text: string): boolean {
@@ -35,13 +35,11 @@ export function isEmptyTaskResponse(text: string): boolean {
     "no actions",
   ];
 
-  // First check exact matches
   if (excludedPhrases.includes(trimmedText)) {
     console.log('Empty task check: Exact match found:', trimmedText);
     return true;
   }
 
-  // Then check for phrases within the text
   const hasPhrase = excludedPhrases.some(phrase => {
     const includes = trimmedText.includes(phrase);
     if (includes) {
@@ -50,14 +48,12 @@ export function isEmptyTaskResponse(text: string): boolean {
     return includes;
   });
 
-  // Check for common patterns that might indicate an empty task message
   const containsOnlyPunctuation = /^[\s\.,!?:;-]*$/.test(trimmedText);
   if (containsOnlyPunctuation) {
     console.log('Empty task check: Contains only punctuation');
     return true;
   }
 
-  // Additional pattern checks for empty task indicators
   const patternChecks = [
     /^no\s+.*\s+found/i,
     /^could\s+not\s+.*\s+any/i,
@@ -111,78 +107,6 @@ interface ChatOptions {
   };
 }
 
-async function getContextData(userId: number) {
-  const userProjects = await db.query.projects.findMany({
-    where: eq(projects.userId, userId),
-    with: {
-      todos: true,
-      note: true,
-    },
-    orderBy: (projects, { desc }) => [desc(projects.createdAt)],
-  });
-
-  // Get the most recent recording first
-  const latestRecording = userProjects.find(p => p.recordingUrl && p.recordingUrl !== 'personal.none');
-
-  const projectsContext = userProjects.map(project => ({
-    title: project.title,
-    description: project.description,
-    createdAt: project.createdAt,
-    hasSummary: !!project.summary,
-    hasTranscription: !!project.transcription,
-    isRecording: project.recordingUrl && project.recordingUrl !== 'personal.none',
-    recordingUrl: project.recordingUrl,
-    todoCount: project.todos?.length || 0,
-    completedTodos: project.todos?.filter(todo => todo.completed).length || 0,
-    todos: project.todos?.map(todo => ({
-      text: todo.text,
-      completed: todo.completed,
-      createdAt: todo.createdAt
-    })) || [],
-    note: project.note ? {
-      content: project.note.content,
-      updatedAt: project.note.updatedAt
-    } : null,
-    transcription: project.transcription,
-    summary: project.summary
-  }));
-
-  return {
-    projects: projectsContext,
-    latestRecording: latestRecording ? {
-      title: latestRecording.title,
-      createdAt: latestRecording.createdAt,
-      transcription: latestRecording.transcription,
-      summary: latestRecording.summary
-    } : null,
-    totalProjects: projectsContext.length,
-    totalRecordings: projectsContext.filter(p => p.isRecording).length,
-    totalTodos: projectsContext.reduce((acc, proj) => acc + proj.todoCount, 0),
-    totalCompletedTodos: projectsContext.reduce((acc, proj) => acc + proj.completedTodos, 0),
-  };
-}
-
-function formatContextForPrompt(enhancedContext: any[]): string {
-  if (!Array.isArray(enhancedContext) || enhancedContext.length === 0) {
-    return 'No relevant context found.';
-  }
-
-  return enhancedContext
-    .map(ctx => {
-      if (!ctx || typeof ctx !== 'object') return '';
-
-      const type = ctx.type || 'Unknown';
-      const source = type.charAt(0).toUpperCase() + type.slice(1);
-      const metadata = ctx.metadata ?
-        `(${new Date(ctx.metadata.timestamp || ctx.metadata.created_at).toLocaleString()})` : '';
-      const text = typeof ctx.text === 'string' ? ctx.text : 'No content available';
-
-      return `[${source}] ${metadata}\n${text.substring(0, 200)}${text.length > 200 ? '...' : ''}`;
-    })
-    .filter(Boolean)
-    .join('\n\n');
-}
-
 export async function createChatCompletion({
   userId,
   message,
@@ -196,12 +120,7 @@ export async function createChatCompletion({
     throw new Error("User not found");
   }
 
-  // Get user settings including processing prompts
-  const userSettings = await db.query.settings.findFirst({
-    where: eq(settings.userId, userId),
-  });
-
-  const apiKey = userSettings?.openAiKey || user.openaiApiKey;
+  const apiKey = user.openaiApiKey;
   if (!apiKey) {
     throw new Error("OpenAI API key not found. Please add your API key in settings.");
   }
@@ -210,7 +129,7 @@ export async function createChatCompletion({
     apiKey,
   });
 
-  // Get project data for context
+  // Get project data for formatting context
   let projectData = null;
   if (context?.projectId) {
     const project = await db.query.projects.findFirst({
@@ -225,58 +144,55 @@ export async function createChatCompletion({
     });
 
     if (project) {
+      const noteContent = project.note?.content || '';
+
+      // Analyze note format
+      const formatAnalysis = {
+        paragraphStyle: noteContent.includes('\n\n') ? 'double' : 'single',
+        bulletStyle: noteContent.includes('•') ? '•' : 
+                    noteContent.includes('-') ? '-' : 
+                    noteContent.includes('*') ? '*' : null,
+        hasNumberedLists: /^\d+\.\s/m.test(noteContent),
+        headingStyle: /^#+\s/m.test(noteContent) ? 'markdown' :
+                     /^[A-Z][^.\n]+:\n/m.test(noteContent) ? 'text' : null,
+        indentation: noteContent.match(/^(\s+)/m)?.[1].length || 0
+      };
+
       projectData = {
         title: project.title,
         transcription: project.transcription,
         summary: project.summary,
-        note: project.note?.content,
-        // Analyze note format to guide response formatting
-        noteFormat: project.note?.content ? {
-          hasBullets: project.note.content.includes('•') || project.note.content.includes('-'),
-          hasNumbering: /^\d+\./.test(project.note.content),
-          hasHeadings: /^#+\s/.test(project.note.content) || /^[A-Z].*:\n/.test(project.note.content),
-          paragraphStyle: project.note.content.includes('\n\n') ? 'double-spaced' : 'single-spaced'
-        } : null
+        note: noteContent,
+        formatAnalysis
       };
     }
   }
 
-  // Get user's custom processing prompt
-  const processingPrompt = userSettings?.defaultPrompt?.trim() || user.defaultPrompt?.trim();
+  // Use user's custom processing prompt or default
+  const processingPrompt = user.defaultPrompt?.trim();
 
-  // Build a focused system message that emphasizes note enhancement and format matching
-  let systemMessage = processingPrompt || `You are an AI assistant focused on enhancing user notes with relevant context from meeting transcriptions. Your primary goal is to maintain consistency with the user's writing style and format.
+  // Build system message focused on format matching and conciseness
+  let systemMessage = processingPrompt || `You are enhancing user notes based on meeting transcripts. Follow these strict guidelines:
 
-Format Matching Rules:
-1. If the user's note uses bullet points (• or -), continue with the same bullet style
-2. If the user's note uses numbered lists (1., 2., etc.), maintain numbered formatting
-3. If the user's note has headings, preserve the heading structure and levels
-4. Match paragraph spacing: use double line breaks if the user does, single if they do
-5. Keep the same indentation and list hierarchy as the user's note
+Format Matching:
+${projectData?.formatAnalysis ? `
+• Use ${projectData.formatAnalysis.paragraphStyle} paragraph spacing
+${projectData.formatAnalysis.bulletStyle ? `• Use "${projectData.formatAnalysis.bulletStyle}" for bullet points` : ''}
+${projectData.formatAnalysis.hasNumberedLists ? '• Maintain numbered list formatting' : ''}
+${projectData.formatAnalysis.headingStyle ? `• Use ${projectData.formatAnalysis.headingStyle} style headings` : ''}
+${projectData.formatAnalysis.indentation ? `• Maintain ${projectData.formatAnalysis.indentation} space indentation` : ''}
+` : ''}
 
-Content Enhancement Rules:
-1. Use the user's note as the primary structure
-2. Only add information from the transcript that directly relates to or clarifies the user's points
-3. Be concise - each addition should be 1-2 sentences maximum
-4. If there's no user note, create a brief, structured summary of key points
-5. Focus on enhancing existing points rather than adding new unrelated ones
+Content Rules:
+1. Only add relevant context from the transcript that directly relates to the user's notes
+2. Keep additions brief - max 1-2 sentences per point
+3. Maintain the user's writing style and format exactly
+4. Focus on clarifying and expanding existing points
+5. Do not add unrelated information
+6. Use paragraph breaks and formatting that matches the user's style`;
 
-Remember: You are seamlessly enriching the user's note, not rewriting it. Your additions should feel like the user's own thoughts, just with added detail from the transcript.`;
-
-  // Add project-specific context and format guidance
-  if (projectData) {
-    systemMessage += `\n\nCurrent Context:
-Project: ${projectData.title}
-${projectData.note ? `\nUser's Note Format:
-- Bullet Points: ${projectData.noteFormat?.hasBullets ? 'Yes - match style' : 'No'}
-- Numbered Lists: ${projectData.noteFormat?.hasNumbering ? 'Yes - continue numbering' : 'No'}
-- Headings: ${projectData.noteFormat?.hasHeadings ? 'Yes - maintain structure' : 'No'}
-- Paragraph Style: ${projectData.noteFormat?.paragraphStyle}
-
-User's Note:
-${projectData.note}` : ''}
-${projectData.transcription ? `\nTranscription Available` : ''}
-${projectData.summary ? `\nSummary Available` : ''}`;
+  if (projectData?.note) {
+    systemMessage += `\n\nUser's Current Note:\n${projectData.note}`;
   }
 
   try {
@@ -284,7 +200,7 @@ ${projectData.summary ? `\nSummary Available` : ''}`;
       model: "gpt-4",
       messages: [
         { role: "system", content: systemMessage },
-        { role: "user", content: message },
+        { role: "user", content: message }
       ],
       temperature: 0.7,
       max_tokens: 500,
@@ -292,7 +208,7 @@ ${projectData.summary ? `\nSummary Available` : ''}`;
 
     const assistantResponse = response.choices[0].message.content || "";
 
-    // Store the chat messages in the database
+    // Store chat messages
     const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
       const [userMsg] = await tx.insert(chats).values({
         userId,
@@ -313,7 +229,7 @@ ${projectData.summary ? `\nSummary Available` : ''}`;
       return [userMsg, assistantMsg];
     });
 
-    // Create embeddings for future context
+    // Create embeddings for context
     await Promise.all([
       createEmbedding({
         contentType: 'chat',
@@ -331,8 +247,7 @@ ${projectData.summary ? `\nSummary Available` : ''}`;
       message: assistantResponse,
       context: {
         hasUserNote: !!projectData?.note,
-        projectTitle: projectData?.title,
-        noteFormat: projectData?.noteFormat
+        formatAnalysis: projectData?.formatAnalysis
       }
     };
   } catch (error: any) {
