@@ -329,6 +329,17 @@ export function NoteEditor({
           class: 'list-decimal pl-6 space-y-2',
         }
       }),
+      TaskList.configure({
+        HTMLAttributes: {
+          class: 'not-prose pl-2',
+        },
+      }),
+      TaskItem.configure({
+        nested: true,
+        HTMLAttributes: {
+          class: 'flex items-center gap-2',
+        },
+      }),
     ],
     content: summaryContent,
     onUpdate: ({ editor }) => {
