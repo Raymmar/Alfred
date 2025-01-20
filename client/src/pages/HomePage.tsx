@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { useRecorder } from "@/hooks/use-recorder";
 import { useMediaDevices } from "@/hooks/use-media-devices";
 import { useProjects } from "@/hooks/use-projects";
-import { useAudioProcessing } from "@/hooks/use-audio-processing";
 import { useSettings } from "@/hooks/use-settings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -63,9 +62,9 @@ export default function HomePage() {
   const [recordingTime, setRecordingTime] = useState<number>(0);
   const [isSaving, setIsSaving] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<number>(0); // Added upload progress state
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
   const recordingTimer = useRef<NodeJS.Timeout>();
-  const { startRecording, stopRecording, uploadProgress: recorderProgress } = useRecorder(); // Updated useRecorder hook
+  const { startRecording, stopRecording, uploadProgress: recorderProgress } = useRecorder();
   const defaultNoteRef = useRef<string>('');
   const {
     audioInputs,
@@ -110,7 +109,7 @@ export default function HomePage() {
 
   useEffect(() => {
     setUploadProgress(recorderProgress);
-  }, [recorderProgress]); // Added useEffect for progress updates
+  }, [recorderProgress]);
 
   const { projects: projectsData, createProject, deleteProject, renameProject } = useProjects();
   const [convertingStates, setConvertingStates] = useState<Record<number, boolean>>({});
@@ -162,7 +161,7 @@ export default function HomePage() {
       });
 
       setIsRecording(true);
-      setUploadProgress(0); // Reset upload progress
+      setUploadProgress(0);
 
       await startRecording({
         audioDeviceId: selectedAudioInput,
@@ -181,7 +180,7 @@ export default function HomePage() {
         variant: "destructive",
       });
       setIsRecording(false);
-      setUploadProgress(0); // Reset upload progress
+      setUploadProgress(0);
     }
   };
 
@@ -284,17 +283,15 @@ export default function HomePage() {
       variant={isRecording ? "destructive" : "default"}
       onClick={isRecording ? handleStopRecording : handleStartRecording}
       className="w-full relative"
-      disabled={!selectedAudioInput || isProcessing || isSaving || isAudioProcessing}
+      disabled={!selectedAudioInput || isProcessing || isSaving}
     >
-      {isProcessing || isSaving || isAudioProcessing ? (
+      {isProcessing || isSaving ? (
         <>
           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
           {isSaving ? (
             <>
               Saving... {uploadProgress > 0 && `(${Math.round(uploadProgress)}%)`}
             </>
-          ) : isAudioProcessing ? (
-            "Processing Audio..."
           ) : (
             "Processing..."
           )}
