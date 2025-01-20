@@ -14,7 +14,7 @@ import {
   CheckSquare,
   Subscript as SubscriptIcon,
   Superscript as SuperscriptIcon,
-  Pencil,
+  MoreHorizontal,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -173,7 +173,7 @@ const EditorToolbar = ({ editor }: { editor: Editor | null }) => {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="sm" className="h-8 px-2">
-            <Pencil className="h-4 w-4" />
+            <MoreHorizontal className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent>
