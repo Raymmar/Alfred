@@ -2,14 +2,15 @@ import { pgTable, text, serial, timestamp, integer, boolean } from "drizzle-orm/
 import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
+import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT } from "@/lib/constants";
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").unique().notNull(),
   password: text("password").notNull(),
   openaiApiKey: text("openai_api_key"),
-  defaultPrompt: text("default_prompt").default("Please provide a clear and concise summary of the key points discussed in this recording. Focus on the main ideas, decisions, and important details."),
-  todoPrompt: text("todo_prompt").default(`Please carefully analyze this transcript and identify all actionable tasks, assignments, and follow-up items.`),
+  defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
+  todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
   storageLocation: text("storage_location"),
 });
 
