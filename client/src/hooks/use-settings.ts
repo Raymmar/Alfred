@@ -6,6 +6,7 @@ type UserSettings = {
   openaiApiKey?: string;
   defaultPrompt?: string;
   todoPrompt?: string;
+  systemPrompt?: string; // Added new field for chat system prompt
 };
 
 type RequestResult = {
@@ -59,7 +60,8 @@ export function useSettings() {
       username: user.username,
       hasOpenAiKey: !!user.openaiApiKey,
       hasDefaultPrompt: !!user.defaultPrompt,
-      hasTodoPrompt: !!user.todoPrompt
+      hasTodoPrompt: !!user.todoPrompt,
+      hasSystemPrompt: !!user.systemPrompt // Added log for new field
     } : null
   });
 
@@ -87,6 +89,7 @@ export function useSettings() {
     openaiApiKey: user.openaiApiKey ?? '',
     defaultPrompt: user.defaultPrompt ?? '',
     todoPrompt: user.todoPrompt ?? '',
+    systemPrompt: user.systemPrompt ?? '', // Added new field
   } : null;
 
   console.log('useSettings returning', {

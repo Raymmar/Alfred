@@ -8,7 +8,7 @@ import { useMediaDevices } from "@/hooks/use-media-devices";
 import { ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
 import { useSettings } from "@/hooks/use-settings";
-import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT } from "@/lib/constants";
+import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 import {
   Select,
   SelectContent,
@@ -22,11 +22,8 @@ export default function SettingsPage() {
   const { settings, updateSettings, isUpdating } = useSettings();
   const {
     audioInputs,
-    videoInputs,
     selectedAudioInput,
-    selectedVideoInput,
     selectAudioInput,
-    selectVideoInput,
   } = useMediaDevices();
 
   // Form state management
@@ -34,6 +31,7 @@ export default function SettingsPage() {
     openaiApiKey: settings?.openaiApiKey || "",
     defaultPrompt: settings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT,
     todoPrompt: settings?.todoPrompt || DEFAULT_TODO_PROMPT,
+    systemPrompt: settings?.systemPrompt || DEFAULT_SYSTEM_PROMPT,
   });
 
   const handleInputChange = (
@@ -207,6 +205,34 @@ export default function SettingsPage() {
                       name="todoPrompt"
                       placeholder={DEFAULT_TODO_PROMPT}
                       value={formData.todoPrompt}
+                      onChange={handleInputChange}
+                      className="min-h-[40vh] resize-y"
+                    />
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Chat System Prompt */}
+          <Card>
+            <CardContent className="space-y-4 pt-6">
+              <div className="space-y-2">
+                <h2 className="text-lg font-semibold">Chat System Prompt</h2>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium" htmlFor="systemPrompt">
+                      Chat Assistant Prompt
+                    </label>
+                    <p className="text-sm text-muted-foreground mb-2">
+                      This prompt defines how the chat assistant behaves when interacting with you.
+                      It guides the personality and capabilities of the AI when responding to your messages.
+                    </p>
+                    <Textarea
+                      id="systemPrompt"
+                      name="systemPrompt"
+                      placeholder={DEFAULT_SYSTEM_PROMPT}
+                      value={formData.systemPrompt}
                       onChange={handleInputChange}
                       className="min-h-[40vh] resize-y"
                     />
