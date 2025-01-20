@@ -418,11 +418,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     app.post("/api/chat", requireAuth, async (req: AuthRequest, res: Response) => {
         try {
           const { message } = req.body;
-    
+
           if (typeof message !== "string" || !message.trim()) {
             return res.status(400).json({ message: "Invalid message" });
           }
-    
+
           const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
             const [userMsg] = await tx.insert(chats).values({
               userId: req.user!.id,
@@ -431,12 +431,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
               projectId: null,
               timestamp: new Date(),
             }).returning();
-    
+
             const aiResponse = await createChatCompletion({
               userId: req.user!.id,
               message: message.trim(),
             });
-    
+
             const [assistantMsg] = await tx.insert(chats).values({
               userId: req.user!.id,
               role: "assistant",
@@ -444,15 +444,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
               projectId: null,
               timestamp: new Date(),
             }).returning();
-    
+
             return [userMsg, assistantMsg];
           });
-    
+
           res.json({
             message: assistantMessage.content,
             messages: [userMessage, assistantMessage]
           });
-    
+
         } catch (error: any) {
           console.error("Chat error:", error);
           res.status(500).json({
@@ -466,20 +466,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (isNaN(projectId)) {
             return res.status(400).json({ message: "Invalid project ID" });
           }
-    
+
           const [project] = await db.query.projects.findMany({
             where: eq(projects.id, projectId),
             limit: 1,
           });
-    
+
           if (!project) {
             return res.status(404).json({ message: "Project not found" });
           }
-    
+
           if (project.userId !== req.user!.id) {
             return res.status(403).json({ message: "Not authorized" });
           }
-    
+
           const messages = await db.query.chats.findMany({
             where: and(
               eq(chats.userId, req.user!.id),
@@ -487,7 +487,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ),
             orderBy: asc(chats.timestamp),
           });
-    
+
           res.json(messages);
         } catch (error: any) {
           console.error("Error fetching project chat messages:", error);
@@ -500,25 +500,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (isNaN(projectId)) {
             return res.status(400).json({ message: "Invalid project ID" });
           }
-    
+
           const { message } = req.body;
           if (typeof message !== "string" || !message.trim()) {
             return res.status(400).json({ message: "Invalid message" });
           }
-    
+
           const [project] = await db.query.projects.findMany({
             where: eq(projects.id, projectId),
             limit: 1,
           });
-    
+
           if (!project) {
             return res.status(404).json({ message: "Project not found" });
           }
-    
+
           if (project.userId !== req.user!.id) {
             return res.status(403).json({ message: "Not authorized" });
           }
-    
+
           const [userMessage] = await db.insert(chats).values({
             userId: req.user!.id,
             projectId,
@@ -526,7 +526,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             content: message.trim(),
             timestamp: new Date(),
           }).returning();
-    
+
           const aiResponse = await createChatCompletion({
             userId: req.user!.id,
             message: message.trim(),
@@ -535,7 +535,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               summary: project.summary,
             },
           });
-    
+
           const [assistantMessage] = await db.insert(chats).values({
             userId: req.user!.id,
             projectId,
@@ -543,7 +543,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             content: aiResponse.message,
             timestamp: new Date(),
           }).returning();
-    
+
           res.json({
             message: aiResponse.message,
             messages: [userMessage, assistantMessage]
@@ -555,6 +555,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
       });
+
     app.get(
       "/api/recordings/:filename/download",
       requireAuth,
@@ -1174,8 +1175,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
    - Identify key topic changes and sections
    - Format as: "# Topic Title"
    - Place at natural topic transitions
-
-2. Regular Timestamps:
+1. Regular Timestamps:
    - Add timestamps [HH:MM:SS.mmm] every 10-30 seconds
    - Place at natural speech breaks
    - Keep timestamps sequential
