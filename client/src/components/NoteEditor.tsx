@@ -66,45 +66,43 @@ const EditorToolbar = ({ editor }: { editor: Editor | null }) => {
   return (
     <div className="sticky top-0 z-10 flex overflow-x-auto overflow-y-hidden items-center gap-1 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-2 whitespace-nowrap">
       <div className="flex items-center gap-1 border-r pr-2 mr-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "h-8 px-2",
-            editor.isActive("heading", { level: 1 }) && "bg-accent",
-          )}
-          onClick={() =>
-            editor.chain().focus().toggleHeading({ level: 1 }).run()
-          }
-        >
-          <Heading1 className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "h-8 px-2",
-            editor.isActive("heading", { level: 2 }) && "bg-accent",
-          )}
-          onClick={() =>
-            editor.chain().focus().toggleHeading({ level: 2 }).run()
-          }
-        >
-          <Heading2 className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "h-8 px-2",
-            editor.isActive("heading", { level: 3 }) && "bg-accent",
-          )}
-          onClick={() =>
-            editor.chain().focus().toggleHeading({ level: 3 }).run()
-          }
-        >
-          <Heading3 className="h-4 w-4" />
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-8 px-2">
+              P
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuItem
+              className={cn(editor.isActive("heading", { level: 1 }) && "bg-accent")}
+              onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+            >
+              <Heading1 className="h-4 w-4 mr-2" />
+              Heading 1
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className={cn(editor.isActive("heading", { level: 2 }) && "bg-accent")}
+              onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+            >
+              <Heading2 className="h-4 w-4 mr-2" />
+              Heading 2
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className={cn(editor.isActive("heading", { level: 3 }) && "bg-accent")}
+              onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+            >
+              <Heading3 className="h-4 w-4 mr-2" />
+              Heading 3
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className={cn(editor.isActive("paragraph") && "bg-accent")}
+              onClick={() => editor.chain().focus().setParagraph().run()}
+            >
+              P
+              <span className="ml-2">Paragraph</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       <div className="flex items-center gap-1 border-r pr-2 mr-2">
