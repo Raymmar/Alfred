@@ -1166,7 +1166,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Format transcript with timestamps
         const formattingResponse = await openai.chat.completions.create({
-          model: "gpt-4",
+          model: "gpt-4o",
           messages: [
             {
               role: "system",
@@ -1206,7 +1206,7 @@ Format Rules:
 
         // Generate title
         const titleResponse = await openai.chat.completions.create({
-          model: "gpt-4",
+          model: "gpt-4o",
           messages: [
             {
               role: "system",
@@ -1812,7 +1812,7 @@ Format Rules:
 
         // Generate title from transcription
         const titleResponse = await openai.chat.completions.create({
-          model: "gpt-4",
+          model: "gpt-4o",
           messages: [
             {
               role: "system",
