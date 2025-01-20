@@ -92,7 +92,7 @@
 
 .ProseMirror li p,
 .prose li p {
-  margin: 0 !important;
+  margin: .25rem !important;
 }
 
 /* Reset any additional prose margins */
