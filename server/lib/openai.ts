@@ -205,7 +205,6 @@ export async function createChatCompletion({
   });
 
   const apiKey = userSettings?.openAiKey || user.openaiApiKey;
-
   if (!apiKey) {
     throw new Error("OpenAI API key not found. Please add your API key in settings.");
   }
@@ -214,82 +213,55 @@ export async function createChatCompletion({
     apiKey,
   });
 
-  const userData = await getContextData(userId);
-  const { enhancedContext, similarityScore } = await updateChatContext(userId, message);
-
-  const { recommendations: recommendedTasks } = await findRecommendedTasks(userId, message, {
-    limit: 5,
-    minSimilarity: 0.5,
-    includeCompleted: false
-  });
-
-  // Build system message with enhanced contextual awareness
-  let systemMessage = `You are Alfred, an intelligent AI assistant with comprehensive access to the user's recording library and task management system.
-
-Database Context:
-Total Projects: ${userData.totalProjects}
-Total Recordings: ${userData.totalRecordings}
-Total Tasks: ${userData.totalTodos} (${userData.totalCompletedTodos} completed)
-
-${userData.latestRecording ? `Latest Recording:
-Title: "${userData.latestRecording.title}"
-Created: ${userData.latestRecording.createdAt.toLocaleString()}
-Has Transcription: ${!!userData.latestRecording.transcription}
-Has Summary: ${!!userData.latestRecording.summary}
-${userData.latestRecording.transcription ? `\nTranscription Preview:\n${userData.latestRecording.transcription.substring(0, 500)}...` : ''}
-${userData.latestRecording.summary ? `\nSummary:\n${userData.latestRecording.summary}` : ''}
-` : 'No recordings available.'}
-
-Available Projects and Recordings:
-${userData.projects.map(p => `
-Project: "${p.title}" (Created: ${p.createdAt.toLocaleString()})
-Type: ${p.isRecording ? 'Recording' : 'Project'}
-${p.description ? `Description: ${p.description}` : ''}
-${p.transcription ? `Has Transcription: Yes\nTranscription Preview:\n${p.transcription.substring(0, 300)}...` : ''}
-${p.summary ? `\nSummary:\n${p.summary}` : ''}
-Tasks (${p.todoCount} total, ${p.completedTodos} completed):
-${p.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'}, Created: ${t.createdAt.toLocaleString()})`).join('\n') || 'No tasks'}
-${p.note ? `\nNotes (Last updated: ${p.note.updatedAt.toLocaleString()}):\n${p.note.content}` : ''}
-`).join('\n')}
-
-Relevant Context:
-${formatContextForPrompt(enhancedContext)}
-
-Recommended Tasks Based on Current Context:
-${recommendedTasks.length > 0
-    ? recommendedTasks.map(task =>
-      `- [${task.completed ? 'Completed' : 'Pending'}] ${task.text}${
-        task.projectTitle ? ` (Project: ${task.projectTitle})` : ''
-      }`
-    ).join('\n')
-    : 'No specifically relevant tasks found for this conversation.'}
-
-Instructions:
-1. Use the provided context to give informed responses about recordings and projects
-2. When asked about "last recording" or "recent recording", refer to the Latest Recording section
-3. Maintain conversation continuity by referencing previous interactions
-4. Be concise. Do not add any filler words or pleasantries to your responses.
-5. If recommending actions, prioritize suggesting tasks from the recommended tasks list
-6. When discussing tasks, reference their current status and project context
-7. Consider both task relevance and project relationships when making suggestions
-8. When asked about recordings, provide both high-level summaries and specific details if available`;
-
-  // For project-specific chat, add focused context
+  // Get only the relevant project data if we have a project context
+  let projectData = null;
   if (context?.projectId) {
-    const projectContext = userData.projects.find(p => p.id === context.projectId);
-    if (projectContext) {
-      systemMessage += `\n\nFocused Project Context:
-Title: "${projectContext.title}"
-${projectContext.description ? `Description: ${projectContext.description}\n` : ''}
-Created: ${projectContext.createdAt.toLocaleString()}
-Tasks: ${projectContext.todoCount} total (${projectContext.completedTodos} completed)
-${projectContext.transcription ? `\nTranscription:\n${projectContext.transcription}` : ''}
-${projectContext.summary ? `\nSummary:\n${projectContext.summary}` : ''}
-${projectContext.note ? `\nNotes:\n${projectContext.note.content}` : ''}
+    const project = await db.query.projects.findFirst({
+      where: and(
+        eq(projects.id, context.projectId),
+        eq(projects.userId, userId)
+      ),
+      with: {
+        todos: true,
+        note: true,
+      },
+    });
 
-Current Tasks:
-${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'})`).join('\n') || 'No tasks'}`;
+    if (project) {
+      projectData = {
+        title: project.title,
+        transcription: project.transcription,
+        summary: project.summary,
+        note: project.note?.content,
+      };
     }
+  }
+
+  // Use user's custom prompt or fall back to default
+  const customPrompt = userSettings?.defaultPrompt?.trim() || user.defaultPrompt?.trim();
+
+  // Build a focused system message that emphasizes note enhancement
+  let systemMessage = customPrompt || `You are an AI assistant focused on enhancing user notes with relevant context from meeting transcriptions. When provided with a user's note and a transcript:
+
+1. Use the user's note as the primary structure
+2. Only add information from the transcript that directly relates to or clarifies points in the user's note
+3. Maintain the same formatting style as the user's note (bullets, paragraphs, headings)
+4. Be concise and only include essential details
+5. If there is no user note, create a brief, structured summary of the key points from the transcript
+6. Format the output to match the user's style:
+   - If the user's note uses bullet points, continue with bullets
+   - If the user's note uses paragraphs, maintain paragraph structure
+   - Keep the same heading levels and formatting
+
+Remember: You are enhancing the user's note, not replacing it. Your additions should seamlessly blend with their existing content.`;
+
+  // Add project-specific context only if we have it
+  if (projectData) {
+    systemMessage += `\n\nCurrent Project Context:
+Title: ${projectData.title}
+${projectData.note ? `\nUser's Note:\n${projectData.note}` : ''}
+${projectData.transcription ? `\nTranscription Context Available` : ''}
+${projectData.summary ? `\nSummary Context Available` : ''}`;
   }
 
   try {
@@ -304,8 +276,8 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
     });
 
     const assistantResponse = response.choices[0].message.content || "";
-    console.log('GPT response:', assistantResponse);
 
+    // Store the chat messages in the database
     const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
       const [userMsg] = await tx.insert(chats).values({
         userId,
@@ -326,6 +298,7 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
       return [userMsg, assistantMsg];
     });
 
+    // Create embeddings for future context
     await Promise.all([
       createEmbedding({
         contentType: 'chat',
@@ -342,9 +315,8 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
     return {
       message: assistantResponse,
       context: {
-        similarityScore,
-        contextCount: enhancedContext.length,
-        recommendedTasks: recommendedTasks.length
+        hasUserNote: !!projectData?.note,
+        projectTitle: projectData?.title
       }
     };
   } catch (error: any) {
