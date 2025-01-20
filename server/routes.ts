@@ -21,6 +21,9 @@ import { createChatCompletion } from "./lib/openai";
 import { RequestHandler } from "express-serve-static-core";
 import OpenAI from "openai";
 
+const CHUNK_SIZE = 12000; // Increased from 4000 to 12000 tokens
+const MAX_TOKENS_OUTPUT = 4000; // Maximum tokens for model output
+
 async function transcribeAudio(filePath: string, apiKey: string): Promise<string> {
   const openai = new OpenAI({ apiKey });
   const transcriptionResponse = await openai.audio.transcriptions.create({
@@ -204,6 +207,62 @@ function requireAuth(req: AuthRequest, res: Response, next: Function): void {
     return;
   }
   next();
+}
+
+async function processTranscriptionInChunks(transcription: string, openai: OpenAI) {
+  console.log('Starting chunked processing:', {
+    transcriptionLength: transcription.length,
+    estimatedTokens: Math.ceil(transcription.length / 4) // rough estimate
+  });
+
+  // Split transcription into chunks
+  const chunks = [];
+  for (let i = 0; i < transcription.length; i += CHUNK_SIZE) {
+    chunks.push(transcription.slice(i, i + CHUNK_SIZE));
+  }
+
+  console.log(`Split transcription into ${chunks.length} chunks`);
+
+  // Process each chunk and combine summaries
+  const chunkSummaries = [];
+  for (const [index, chunk] of chunks.entries()) {
+    try {
+      console.log(`Processing summary chunk ${index + 1}/${chunks.length}`, {
+        chunkSize: chunk.length,
+        progress: `${((index + 1) / chunks.length * 100).toFixed(1)}%`
+      });
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4-1106-preview", // Using the latest model with 128k context
+        messages: [
+          {
+            role: "system",
+            content: `You are summarizing part ${index + 1} of ${chunks.length} of a transcription. 
+                     Focus on key points and action items. 
+                     If this is not the first chunk, try to maintain continuity with previous content.`
+          },
+          {
+            role: "user",
+            content: `Summarize this part of the transcription, focusing on key points and any action items:\n\n${chunk}`
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: MAX_TOKENS_OUTPUT
+      });
+
+      const summary = response.choices[0].message.content || "";
+      console.log(`Chunk ${index + 1} summary length: ${summary.length}`);
+      chunkSummaries.push(summary);
+    } catch (error: any) {
+      console.error(`Error processing chunk ${index + 1}:`, {
+        error: error.message,
+        chunk: chunk.length
+      });
+      throw error;
+    }
+  }
+
+  return chunkSummaries;
 }
 
 export function registerRoutes(app: Express): Promise<Server> {
@@ -880,7 +939,7 @@ export function registerRoutes(app: Express): Promise<Server> {
           }
           const [project] = await db.query.projects.findMany({
             where: and(
-              eq(projects.id, projectId),
+              eq(projectsid, projectId),
               eq(projects.userId, req.user!.id),
             ),
             limit: 1,
@@ -1083,12 +1142,16 @@ export function registerRoutes(app: Express): Promise<Server> {
           });
         }
       });
+    const processingStart = Date.now();
+
     app.post("/api/projects/:projectId/process", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const projectId = parseInt(req.params.projectId);
         if (isNaN(projectId)) {
           return res.status(400).json({ message: "Invalid project ID" });
         }
+
+        console.log('Starting project processing:', { projectId, timestamp: new Date().toISOString() });
 
         const [project] = await db.query.projects.findMany({
           where: eq(projects.id, projectId),
@@ -1116,9 +1179,6 @@ export function registerRoutes(app: Express): Promise<Server> {
           });
         }
 
-        // Start timing for monitoring
-        const startTime = Date.now();
-
         if (!project.recordingUrl) {
           return res.status(400).json({ message: "No recording URL found" });
         }
@@ -1131,7 +1191,7 @@ export function registerRoutes(app: Express): Promise<Server> {
           projectId,
           recordingUrl: project.recordingUrl,
           recordingPath,
-          startTime: new Date(startTime).toISOString()
+          startTime: new Date(processingStart).toISOString()
         });
 
         try {
@@ -1145,66 +1205,29 @@ export function registerRoutes(app: Express): Promise<Server> {
         }
 
         console.log('Starting Whisper transcription');
-        let transcription: string;
-        try {
-          transcription = await transcribeAudio(recordingPath, apiKey);
-          console.log('Transcription successful, length:', transcription.length);
-        } catch (error: any) {
-          console.error('Transcription error:', error);
-          return res.status(500).json({
-            message: "Failed to transcribe audio",
-            error: error.message
-          });
-        }
+        const transcription = await transcribeAudio(recordingPath, apiKey);
+        console.log('Transcription successful:', {
+          length: transcription.length,
+          estimatedTokens: Math.ceil(transcription.length / 4)
+        });
 
         // Update project with transcription
         await db.update(projects)
           .set({ transcription })
           .where(eq(projects.id, projectId));
 
-        // Process transcription in chunks for summary
+        // Process transcription in chunks
         const openai = new OpenAI({ apiKey });
-        const CHUNK_SIZE = 4000; // Maximum size for each chunk
-        const chunks = [];
-
-        // Split transcription into chunks
-        for (let i = 0; i < transcription.length; i += CHUNK_SIZE) {
-          chunks.push(transcription.slice(i, i + CHUNK_SIZE));
-        }
-
-        // Process each chunk and combine summaries
-        const chunkSummaries = [];
-        for (const [index, chunk] of chunks.entries()) {
-          try {
-            console.log(`Processing summary chunk ${index + 1}/${chunks.length}`);
-            const response = await openai.chat.completions.create({
-              model: "gpt-4",
-              messages: [
-                {
-                  role: "system",
-                  content: `You are summarizing part ${index + 1} of ${chunks.length} of a transcription. 
-                           Focus on key points and action items. 
-                           If this is not the first chunk, try to maintain continuity with previous content.`
-                },
-                {
-                  role: "user",
-                  content: `Summarize this part of the transcription, focusing on key points and any action items:\n\n${chunk}`
-                }
-              ],
-              temperature: 0.7,
-              max_tokens: 1000
-            });
-
-            chunkSummaries.push(response.choices[0].message.content || "");
-          } catch (error: any) {
-            console.error(`Error processing chunk ${index + 1}:`, error);
-            throw error;
-          }
-        }
+        const chunkSummaries = await processTranscriptionInChunks(transcription, openai);
 
         // Combine chunk summaries
+        console.log('Combining summaries:', {
+          chunks: chunkSummaries.length,
+          totalLength: chunkSummaries.join('\n\n').length
+        });
+
         const combinedSummary = await openai.chat.completions.create({
-          model: "gpt-4",
+          model: "gpt-4-1106-preview",
           messages: [
             {
               role: "system",
@@ -1216,14 +1239,16 @@ export function registerRoutes(app: Express): Promise<Server> {
             }
           ],
           temperature: 0.7,
-          max_tokens: 1000
+          max_tokens: MAX_TOKENS_OUTPUT
         });
 
         const summary = combinedSummary.choices[0].message.content || "";
+        console.log('Summary generated:', { length: summary.length });
 
-        // Extract tasks from the summary using a separate request
+        // Extract tasks
+        console.log('Extracting tasks from summary');
         const taskResponse = await openai.chat.completions.create({
-          model: "gpt-4",
+          model: "gpt-4-1106-preview",
           messages: [
             {
               role: "system",
@@ -1235,7 +1260,7 @@ export function registerRoutes(app: Express): Promise<Server> {
             }
           ],
           temperature: 0.7,
-          max_tokens: 1000
+          max_tokens: MAX_TOKENS_OUTPUT
         });
 
         const tasks = taskResponse.choices[0].message.content || "";
@@ -1245,12 +1270,15 @@ export function registerRoutes(app: Express): Promise<Server> {
           .map(task => task.trim().substring(2).trim())
           .filter(task => !isEmptyTaskResponse(task));
 
+        console.log('Tasks extracted:', { count: taskList.length });
+
         // Update project with summary
         await db.update(projects)
           .set({ summary })
           .where(eq(projects.id, projectId));
 
         // Create tasks
+        let tasksCreated = 0;
         for (const taskText of taskList) {
           if (!isEmptyTaskResponse(taskText) && !(await isDuplicateTask(taskText, projectId))) {
             await db.insert(todos).values({
@@ -1259,10 +1287,11 @@ export function registerRoutes(app: Express): Promise<Server> {
               completed: false,
               createdAt: new Date(),
             });
+            tasksCreated++;
           }
         }
 
-        // Clean up any empty tasks that might have been created
+        // Clean up any empty tasks
         await cleanupEmptyTasks(projectId);
 
         // Get updated project with todos
@@ -1276,20 +1305,29 @@ export function registerRoutes(app: Express): Promise<Server> {
           },
         });
 
+        const processingDuration = Date.now() - processingStart;
         console.log('Processing completed:', {
           projectId,
-          duration: Date.now() - startTime,
+          duration: processingDuration,
           transcriptionLength: transcription.length,
           summaryLength: summary.length,
-          tasksCreated: taskList.length
+          tasksCreated,
+          totalChunks: chunkSummaries.length
         });
 
         res.json(updatedProject);
       } catch (error: any) {
-        console.error("Processing error:", error);
+        const processingDuration = Date.now() - processingStart;
+        console.error("Processing error:", {
+          error: error.message,
+          stack: error.stack,
+          duration: processingDuration
+        });
+
         res.status(500).json({
           message: "Failed to process recording",
-          error: error instanceof Error ? error.message : String(error),
+          error: error.message,
+          details: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
       }
     });
