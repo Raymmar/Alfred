@@ -104,3 +104,16 @@
 .prose> :last-child {
   margin-bottom: 0 !important;
 }
+
+.ProseMirror li[data-type="taskItem"] {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}
+
+.ProseMirror li[data-type="taskItem"] p {
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: 1.5 !important;
+}
