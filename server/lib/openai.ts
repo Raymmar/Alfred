@@ -5,9 +5,36 @@ import { settings, users, projects, todos, chats } from "@db/schema";
 import { updateChatContext, createEmbedding } from './embeddings';
 import { findRecommendedTasks } from './embeddings';
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT } from "@/lib/constants";
+import { marked } from 'marked';
+
+// Configure marked for HTML output
+marked.setOptions({
+  gfm: true, // GitHub Flavored Markdown
+  breaks: true, // Convert \n to <br>
+  headerIds: false, // Don't add IDs to headers
+  mangle: false, // Don't escape HTML
+  sanitize: false // Don't sanitize HTML (TipTap handles this)
+});
 
 // the newest OpenAI model is "gpt-4o" which was released May 13, 2024
 const CHAT_MODEL = "gpt-4o";
+
+// Helper function to convert markdown to HTML
+function convertMarkdownToHTML(markdown: string): string {
+  if (!markdown) return '';
+
+  try {
+    // Convert markdown to HTML
+    const html = marked(markdown);
+
+    // Clean up empty paragraphs that might be created
+    return html.replace(/<p>\s*<\/p>/g, '');
+  } catch (error) {
+    console.error('Error converting markdown to HTML:', error);
+    // If conversion fails, wrap the original content in a paragraph
+    return `<p>${markdown}</p>`;
+  }
+}
 
 // Task filtering functions - used by routes.ts only
 export function isEmptyTaskResponse(text: string): boolean {
@@ -304,6 +331,10 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
     const assistantResponse = response.choices[0].message.content || "";
     console.log('GPT response:', assistantResponse);
 
+    // Convert markdown response to HTML
+    const htmlResponse = convertMarkdownToHTML(assistantResponse);
+    console.log('Converted HTML response:', htmlResponse);
+
     const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
       const [userMsg] = await tx.insert(chats).values({
         userId,
@@ -316,7 +347,7 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
       const [assistantMsg] = await tx.insert(chats).values({
         userId,
         role: "assistant",
-        content: assistantResponse,
+        content: htmlResponse, // Store the HTML version
         projectId: context?.projectId || null,
         timestamp: new Date(),
       }).returning();
@@ -333,12 +364,12 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
       createEmbedding({
         contentType: 'chat',
         contentId: assistantMessage.id,
-        contentText: assistantResponse,
+        contentText: htmlResponse, // Use HTML version for embedding
       })
     ]);
 
     return {
-      message: assistantResponse,
+      message: htmlResponse, // Return HTML version
       context: {
         similarityScore,
         contextCount: enhancedContext.length,
