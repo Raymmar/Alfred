@@ -209,6 +209,8 @@ export default function HomePage() {
         throw new Error(result.message);
       }
 
+      setIsProcessing(true);
+
       toast({
         title: "Processing audio...",
         description: "Analyzing your recording...",
@@ -349,6 +351,7 @@ export default function HomePage() {
                   <div className="space-y-3 px-4">
                     {projects.map((project) => {
                       const isProcessing = !project.transcription;
+                      const isCurrentlyProcessing = isProcessing && project.id === selectedProject?.id;
 
                       return (
                         <Card
@@ -423,7 +426,7 @@ export default function HomePage() {
                               </DropdownMenu>
                             </div>
 
-                            {isProcessing && (
+                            {isCurrentlyProcessing && (
                               <div className="flex items-center gap-2 text-sm text-muted-foreground mt-3">
                                 <Loader2 className="h-4 w-4 animate-spin" />
                                 Processing recording...

@@ -99,7 +99,8 @@ export function useAudioProcessing() {
     mutationFn: processAudio,
     onSuccess: (result) => {
       if (result.ok) {
-        // Invalidate both projects and todos queries to refresh task list
+        // Immediately invalidate queries to refresh the UI
+        queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
         queryClient.invalidateQueries({ queryKey: ['projects'] });
         queryClient.invalidateQueries({ queryKey: ['todos'] });
       }
