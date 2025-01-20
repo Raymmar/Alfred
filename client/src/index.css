@@ -83,6 +83,27 @@
   font-size: 1.125rem !important;
 }
 
+/* Task list specific styling */
+.ProseMirror ul[data-type="taskList"],
+.prose ul[data-type="taskList"] {
+  list-style: none !important;
+  padding: 0 !important;
+}
+
+.ProseMirror ul[data-type="taskList"] li,
+.prose ul[data-type="taskList"] li {
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.5rem !important;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label,
+.prose ul[data-type="taskList"] li > label {
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.5rem !important;
+}
+
 .ProseMirror p:not(li p),
 .prose p:not(li p) {
   margin: 0 0 0.75rem 0 !important;
