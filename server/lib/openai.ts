@@ -50,14 +50,122 @@ function convertMarkdownToHTML(markdown: string): string {
   }
 }
 
+// Task filtering functions - used by routes.ts only
+export function isEmptyTaskResponse(text: string): boolean {
+  if (!text || typeof text !== 'string') {
+    console.log('Empty task check: Invalid or empty input');
+    return true;
+  }
+
+  const trimmedText = text.trim().toLowerCase();
+  if (!trimmedText) {
+    console.log('Empty task check: Empty after trimming');
+    return true;
+  }
+
+  const excludedPhrases = [
+    "no task",
+    "no tasks",
+    "no deliverable",
+    "no deliverables",
+    "no tasks identified",
+    "no deliverables identified",
+    "no tasks or deliverables",
+    "no tasks or deliverables identified",
+    "no specific tasks",
+    "no specific deliverables",
+    "none identified",
+    "could not identify",
+    "unable to identify",
+    "no action items",
+    "no actions",
+  ];
+
+  // First check exact matches
+  if (excludedPhrases.includes(trimmedText)) {
+    console.log('Empty task check: Exact match found:', trimmedText);
+    return true;
+  }
+
+  // Then check for phrases within the text
+  const hasPhrase = excludedPhrases.some(phrase => {
+    const includes = trimmedText.includes(phrase);
+    if (includes) {
+      console.log('Empty task check: Phrase match found:', phrase, 'in:', trimmedText);
+    }
+    return includes;
+  });
+
+  // Check for common patterns that might indicate an empty task message
+  const containsOnlyPunctuation = /^[\s\.,!?:;-]*$/.test(trimmedText);
+  if (containsOnlyPunctuation) {
+    console.log('Empty task check: Contains only punctuation');
+    return true;
+  }
+
+  // Additional pattern checks for empty task indicators
+  const patternChecks = [
+    /^no\s+.*\s+found/i,
+    /^could\s+not\s+.*\s+any/i,
+    /^unable\s+to\s+.*\s+any/i,
+    /^did\s+not\s+.*\s+any/i,
+    /^doesn't\s+.*\s+any/i,
+    /^does\s+not\s+.*\s+any/i,
+    /^none\s+.*\s+found/i,
+    /^no\s+.*\s+identified/i,
+  ];
+
+  const matchesPattern = patternChecks.some(pattern => {
+    const matches = pattern.test(trimmedText);
+    if (matches) {
+      console.log('Empty task check: Pattern match found:', pattern, 'in:', trimmedText);
+    }
+    return matches;
+  });
+
+  return hasPhrase || matchesPattern;
+}
+
+export async function cleanupEmptyTasks(projectId: number): Promise<void> {
+  try {
+    const projectTodos = await db.query.todos.findMany({
+      where: eq(todos.projectId, projectId),
+    });
+
+    for (const todo of projectTodos) {
+      if (isEmptyTaskResponse(todo.text)) {
+        console.log('Cleanup: Removing task that indicates no tasks:', todo.text);
+        await db.delete(todos)
+          .where(and(
+            eq(todos.id, todo.id),
+            eq(todos.projectId, projectId)
+          ));
+      }
+    }
+  } catch (error) {
+    console.error('Error during task cleanup:', error);
+  }
+}
+
 // the newest OpenAI model is "gpt-4o" which was released May 13, 2024
 const CHAT_MODEL = "gpt-4o";
+
+interface ChatOptions {
+  userId: number;
+  message: string;
+  context?: {
+    transcription?: string | null;
+    summary?: string | null;
+    projectId?: number;
+  };
+  promptType?: 'primary' | 'todo' | 'system';
+}
 
 export async function createChatCompletion({
   userId,
   message,
   context,
-  promptType = 'primary'
+  promptType = 'system'
 }: ChatOptions) {
   const user = await db.query.users.findFirst({
     where: eq(users.id, userId),
@@ -227,17 +335,6 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
   }
 }
 
-interface ChatOptions {
-  userId: number;
-  message: string;
-  context?: {
-    transcription?: string | null;
-    summary?: string | null;
-    projectId?: number;
-  };
-  promptType?: 'primary' | 'todo';
-}
-
 async function getContextData(userId: number) {
   const userProjects = await db.query.projects.findMany({
     where: eq(projects.userId, userId),
@@ -309,100 +406,4 @@ function formatContextForPrompt(enhancedContext: any[]): string {
     })
     .filter(Boolean)
     .join('\n\n');
-}
-
-export function isEmptyTaskResponse(text: string): boolean {
-  if (!text || typeof text !== 'string') {
-    console.log('Empty task check: Invalid or empty input');
-    return true;
-  }
-
-  const trimmedText = text.trim().toLowerCase();
-  if (!trimmedText) {
-    console.log('Empty task check: Empty after trimming');
-    return true;
-  }
-
-  const excludedPhrases = [
-    "no task",
-    "no tasks",
-    "no deliverable",
-    "no deliverables",
-    "no tasks identified",
-    "no deliverables identified",
-    "no tasks or deliverables",
-    "no tasks or deliverables identified",
-    "no specific tasks",
-    "no specific deliverables",
-    "none identified",
-    "could not identify",
-    "unable to identify",
-    "no action items",
-    "no actions",
-  ];
-
-  // First check exact matches
-  if (excludedPhrases.includes(trimmedText)) {
-    console.log('Empty task check: Exact match found:', trimmedText);
-    return true;
-  }
-
-  // Then check for phrases within the text
-  const hasPhrase = excludedPhrases.some(phrase => {
-    const includes = trimmedText.includes(phrase);
-    if (includes) {
-      console.log('Empty task check: Phrase match found:', phrase, 'in:', trimmedText);
-    }
-    return includes;
-  });
-
-  // Check for common patterns that might indicate an empty task message
-  const containsOnlyPunctuation = /^[\s\.,!?:;-]*$/.test(trimmedText);
-  if (containsOnlyPunctuation) {
-    console.log('Empty task check: Contains only punctuation');
-    return true;
-  }
-
-  // Additional pattern checks for empty task indicators
-  const patternChecks = [
-    /^no\s+.*\s+found/i,
-    /^could\s+not\s+.*\s+any/i,
-    /^unable\s+to\s+.*\s+any/i,
-    /^did\s+not\s+.*\s+any/i,
-    /^doesn't\s+.*\s+any/i,
-    /^does\s+not\s+.*\s+any/i,
-    /^none\s+.*\s+found/i,
-    /^no\s+.*\s+identified/i,
-  ];
-
-  const matchesPattern = patternChecks.some(pattern => {
-    const matches = pattern.test(trimmedText);
-    if (matches) {
-      console.log('Empty task check: Pattern match found:', pattern, 'in:', trimmedText);
-    }
-    return matches;
-  });
-
-  return hasPhrase || matchesPattern;
-}
-
-export async function cleanupEmptyTasks(projectId: number): Promise<void> {
-  try {
-    const projectTodos = await db.query.todos.findMany({
-      where: eq(todos.projectId, projectId),
-    });
-
-    for (const todo of projectTodos) {
-      if (isEmptyTaskResponse(todo.text)) {
-        console.log('Cleanup: Removing task that indicates no tasks:', todo.text);
-        await db.delete(todos)
-          .where(and(
-            eq(todos.id, todo.id),
-            eq(todos.projectId, projectId)
-          ));
-      }
-    }
-  } catch (error) {
-    console.error('Error during task cleanup:', error);
-  }
 }
