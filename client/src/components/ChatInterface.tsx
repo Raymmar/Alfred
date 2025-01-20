@@ -7,7 +7,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useProjects } from "@/hooks/use-projects";
 import { cn } from "@/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import ReactMarkdown from 'react-markdown';
 
 interface Message {
   role: "user" | "assistant";
@@ -34,16 +33,13 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
     ? projects.find(p => p.id === projectId)
     : null;
 
-  // Define query keys based on whether we're in a project context or global chat
   const messagesQueryKey = projectId ? ['messages', projectId] : ['messages'];
   const chatEndpoint = projectId ? `/api/projects/${projectId}/chat` : '/api/chat';
 
-  // Fetch chat messages from API with persistence configuration
   const { data: messages = [] } = useQuery<Message[]>({
     queryKey: messagesQueryKey,
     enabled: true,
     staleTime: Infinity,
-    cacheTime: Infinity,
     gcTime: Infinity,
     retry: false,
     refetchOnWindowFocus: false,
@@ -84,7 +80,6 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
     try {
       setIsLoading(true);
 
-      // Optimistically update the cache with the user's message
       const newUserMessage = {
         role: "user" as const,
         content: currentInput,
@@ -119,18 +114,14 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
       const data = await response.json();
 
       if (data.messages?.length === 2) {
-        // Update the cache with both messages from the server
         queryClient.setQueryData<Message[]>(messagesQueryKey, (old = []) => {
-          // Remove the optimistic user message
           const filtered = old.filter(msg => msg.timestamp !== timestamp);
-          // Add both the actual user message and assistant response
           return [...filtered, ...data.messages];
         });
       }
 
     } catch (error: any) {
       console.error("Chat error:", error);
-      // Revert optimistic update on error
       queryClient.setQueryData<Message[]>(messagesQueryKey, (old = []) => 
         old?.filter(msg => msg.timestamp !== timestamp) || []
       );
@@ -154,15 +145,21 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
             <div
               key={`${message.role}-${message.timestamp}-${i}`}
               className={cn(
-                "flex w-max max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap",
+                "flex w-max max-w-[80%] rounded-lg px-3 py-2 text-sm",
                 message.role === "user"
-                  ? "ml-auto bg-primary text-primary-foreground prose-p:text-primary-foreground prose-li:text-primary-foreground prose-strong:text-primary-foreground prose-code:text-primary-foreground"
+                  ? "ml-auto bg-primary text-primary-foreground"
                   : "bg-muted"
               )}
             >
-              <ReactMarkdown className="prose dark:prose-invert max-w-none prose-sm sm:prose lg:prose-lg xl:prose-2xl">
-                {message.content}
-              </ReactMarkdown>
+              <div 
+                className={cn(
+                  "prose prose-sm dark:prose-invert max-w-none break-words",
+                  message.role === "user" 
+                    ? "prose-headings:text-primary-foreground prose-p:text-primary-foreground prose-strong:text-primary-foreground prose-code:text-primary-foreground"
+                    : "prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-code:text-muted-foreground"
+                )}
+                dangerouslySetInnerHTML={{ __html: message.content }}
+              />
             </div>
           ))}
           {messages.length === 0 && (

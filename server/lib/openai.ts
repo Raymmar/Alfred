@@ -7,17 +7,16 @@ import { findRecommendedTasks } from './embeddings';
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT } from "@/lib/constants";
 import { marked } from 'marked';
 
-// Configure marked for minimal HTML output
+// Configure marked for clean HTML output compatible with TipTap and our styling
 marked.setOptions({
   gfm: true, // GitHub Flavored Markdown
   breaks: true, // Convert \n to <br>
-  headerIds: false, // Don't add IDs to headers
   mangle: false, // Don't escape HTML
-  sanitize: false // Don't sanitize HTML (TipTap handles this)
+  sanitize: false, // Don't sanitize HTML (we handle this on the frontend)
+  headerPrefix: '', // Don't prefix headers
+  headerIds: false, // Don't add IDs to headers
+  smartypants: true, // Use smart punctuation
 });
-
-// the newest OpenAI model is "gpt-4o" which was released May 13, 2024
-const CHAT_MODEL = "gpt-4o";
 
 // Helper function to convert markdown to HTML with minimal formatting
 function convertMarkdownToHTML(markdown: string): string {
@@ -25,26 +24,35 @@ function convertMarkdownToHTML(markdown: string): string {
 
   try {
     // Convert markdown to HTML
-    let html = marked(markdown);
+    const html = marked(markdown);
 
-    // Clean up HTML:
-    // 1. Remove any style attributes
-    html = html.replace(/\sstyle="[^"]*"/g, '');
-    // 2. Remove any class attributes
-    html = html.replace(/\sclass="[^"]*"/g, '');
-    // 3. Clean up empty paragraphs
-    html = html.replace(/<p>\s*<\/p>/g, '');
-    // 4. Remove any data attributes
-    html = html.replace(/\sdata-[^=]*="[^"]*"/g, '');
-    // 5. Clean up multiple line breaks
-    html = html.replace(/(\r?\n){2,}/g, '\n');
-
-    return html;
+    // Clean up HTML but preserve essential formatting
+    return html
+      // Remove any style attributes
+      .replace(/\sstyle="[^"]*"/g, '')
+      // Remove any class attributes
+      .replace(/\sclass="[^"]*"/g, '')
+      // Clean up empty paragraphs
+      .replace(/<p>\s*<\/p>/g, '')
+      // Remove any data attributes
+      .replace(/\sdata-[^=]*="[^"]*"/g, '')
+      // Clean up multiple line breaks while preserving intentional spacing
+      .replace(/(\r?\n){3,}/g, '\n\n')
+      // Ensure proper spacing around list items
+      .replace(/<\/li><li>/g, '</li>\n<li>')
+      // Ensure proper spacing around headers
+      .replace(/<\/h([1-6])><h([1-6])>/g, '</h$1>\n<h$2>')
+      // Normalize whitespace
+      .trim();
   } catch (error) {
     console.error('Error converting markdown to HTML:', error);
     return `<p>${markdown}</p>`;
   }
 }
+
+// the newest OpenAI model is "gpt-4o" which was released May 13, 2024
+const CHAT_MODEL = "gpt-4o";
+
 
 // Task filtering functions - used by routes.ts only
 export function isEmptyTaskResponse(text: string): boolean {
