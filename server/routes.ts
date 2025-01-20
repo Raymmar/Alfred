@@ -1707,6 +1707,151 @@ Format Rules:
       }
       res.status(401).send("Not logged in");
     });
+    app.post("/api/projects/:projectId/reprocess", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const projectId = parseInt(req.params.projectId);
+    if (isNaN(projectId)) {
+      return res.status(400).json({ message: "Invalid project ID" });
+    }
+
+    // Get the project to verify ownership and existence
+    const [project] = await db.query.projects.findMany({
+      where: eq(projects.id, projectId),
+      limit: 1,
+    });
+
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+
+    if (project.userId !== req.user!.id) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    // Clear existing processing results
+    await db
+      .update(projects)
+      .set({
+        transcription: null,
+        summary: null,
+      })
+      .where(eq(projects.id, projectId));
+
+    // Clean up any existing tasks
+    await db.delete(todos).where(eq(todos.projectId, projectId));
+
+    // Return success immediately - processing will happen asynchronously
+    res.json({ message: "Re-processing started" });
+
+    // Start processing in the background
+    try {
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+      });
+
+      // Get the recording file path
+      const recordingPath = path.join(getRecordingsPath(), project.recordingUrl);
+
+      // Check if the file exists
+      if (!existsSync(recordingPath)) {
+        console.error('Recording file not found:', recordingPath);
+        return;
+      }
+
+      // Transcribe the audio
+      const transcriptionResponse = await openai.audio.transcriptions.create({
+        file: fs.createReadStream(recordingPath),
+        model: "whisper-1",
+      });
+
+      const transcription = transcriptionResponse.text;
+
+      // Get the user's settings for custom prompts
+      const [user] = await db.query.users.findMany({
+        where: eq(users.id, req.user!.id),
+        limit: 1,
+      });
+
+      // Generate summary using the transcription
+      const summaryResponse = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: [
+          {
+            role: "system",
+            content: user?.defaultPrompt || "You are a helpful assistant that summarizes audio transcriptions.",
+          },
+          {
+            role: "user",
+            content: `Please summarize this transcription:\n\n${transcription}`,
+          },
+        ],
+      });
+
+      const summary = summaryResponse.choices[0]?.message?.content || "";
+
+      // Generate tasks from the transcription
+      const tasksResponse = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: [
+          {
+            role: "system",
+            content: user?.todoPrompt || "Extract actionable tasks or deliverables from the transcription.",
+          },
+          {
+            role: "user",
+            content: `Please extract tasks from this transcription:\n\n${transcription}`,
+          },
+        ],
+      });
+
+      const tasksText = tasksResponse.choices[0]?.message?.content || "";
+      const tasks = tasksText
+        .split('\n')
+        .filter(task => task.trim() && !isEmptyTaskResponse(task));
+
+      // Update the project with transcription and summary
+      await db
+        .update(projects)
+        .set({
+          transcription,
+          summary,
+          updatedAt: new Date(),
+        })
+        .where(eq(projects.id, projectId));
+
+      // Create tasks if any were extracted
+      if (tasks.length > 0) {
+        for (const taskText of tasks) {
+          if (await isDuplicateTask(taskText, projectId)) {
+            console.log('Skipping duplicate task:', taskText);
+            continue;
+          }
+
+          await db.insert(todos).values({
+            text: taskText,
+            completed: false,
+            projectId,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        }
+      }
+
+      // Clean up any empty tasks that might have been created
+      await cleanupEmptyTasks(projectId);
+
+    } catch (error) {
+      console.error('Error processing audio:', error);
+      // We don't send this error to the client as the request has already been responded to
+    }
+  } catch (error: any) {
+    console.error('Error initiating reprocessing:', error);
+    res.status(500).json({
+      message: error.message || "Failed to reprocess audio",
+    });
+  }
+});
+
     return httpServer;
   } catch (error) {
     console.error("Error during route registration:", error);

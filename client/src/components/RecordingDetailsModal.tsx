@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MediaPlayer } from "@/components/MediaPlayer";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { TaskList } from "@/components/TaskList";
 import { useToast } from "@/hooks/use-toast";
 import type { SelectProject, SelectTodo } from "@db/schema";
@@ -24,6 +24,45 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState(defaultTab);
+
+  // Add mutation for re-processing
+  const reprocessMutation = useMutation({
+    mutationFn: async (projectId: number) => {
+      const response = await fetch(`/api/projects/${projectId}/reprocess`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Success",
+        description: "Audio re-processing started",
+      });
+      // Invalidate project data to show updated processing status
+      queryClient.invalidateQueries({ queryKey: ['projects', project.id] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to re-process audio",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleReprocess = async (projectId: number) => {
+    try {
+      await reprocessMutation.mutateAsync(projectId);
+    } catch (error) {
+      console.error('Error re-processing project:', error);
+    }
+  };
 
   useEffect(() => {
     if (open) {
@@ -50,12 +89,12 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
         const previousTodos = queryClient.getQueryData(['todos']);
 
         // Optimistically update projects cache
-        queryClient.setQueryData<ProjectWithTodos[]>(['projects'], (old = []) => 
+        queryClient.setQueryData<ProjectWithTodos[]>(['projects'], (old = []) =>
           old.filter(p => p.id !== project.id)
         );
 
         // Optimistically update todos cache by filtering out todos from this project
-        queryClient.setQueryData<SelectTodo[]>(['todos'], (old = []) => 
+        queryClient.setQueryData<SelectTodo[]>(['todos'], (old = []) =>
           old.filter(todo => todo.projectId !== project.id)
         );
 
@@ -107,11 +146,13 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
           </DialogDescription>
         </DialogHeader>
         <div className="aspect-video mb-4">
-          <MediaPlayer 
+          <MediaPlayer
             src={currentProject.recordingUrl ? `/recordings/${currentProject.recordingUrl}` : ''}
             className="w-full h-full"
             showControls={true}
             autoPlay={false}
+            projectId={currentProject.id}
+            onReprocess={handleReprocess}
           />
         </div>
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="mt-4">
@@ -133,8 +174,8 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
           <TabsContent value="tasks" className="mt-4">
             <ScrollArea className="h-[400px] rounded-md border bg-transparent">
               <div className="p-4">
-                <TaskList 
-                  maintainOrder 
+                <TaskList
+                  maintainOrder
                   className="w-full"
                   projectId={currentProject.id}
                 />
