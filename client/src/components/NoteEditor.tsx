@@ -16,6 +16,12 @@ import {
   Superscript as SuperscriptIcon,
   Pencil,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import { format } from "date-fns";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -164,44 +170,36 @@ const EditorToolbar = ({ editor }: { editor: Editor | null }) => {
         </Button>
       </div>
 
-      <div className="flex items-center gap-1 border-r pr-2 mr-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "h-8 px-2",
-            editor.isActive("subscript") && "bg-accent",
-          )}
-          onClick={() => editor.chain().focus().toggleSubscript().run()}
-        >
-          <SubscriptIcon className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "h-8 px-2",
-            editor.isActive("superscript") && "bg-accent",
-          )}
-          onClick={() => editor.chain().focus().toggleSuperscript().run()}
-        >
-          <SuperscriptIcon className="h-4 w-4" />
-        </Button>
-      </div>
-
-      <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "h-8 px-2",
-            editor.isActive("codeBlock") && "bg-accent",
-          )}
-          onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-        >
-          <Code2 className="h-4 w-4" />
-        </Button>
-      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-8 px-2">
+            <Pencil className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem
+            className={cn(editor.isActive("subscript") && "bg-accent")}
+            onClick={() => editor.chain().focus().toggleSubscript().run()}
+          >
+            <SubscriptIcon className="h-4 w-4 mr-2" />
+            Subscript
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className={cn(editor.isActive("superscript") && "bg-accent")}
+            onClick={() => editor.chain().focus().toggleSuperscript().run()}
+          >
+            <SuperscriptIcon className="h-4 w-4 mr-2" />
+            Superscript
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className={cn(editor.isActive("codeBlock") && "bg-accent")}
+            onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+          >
+            <Code2 className="h-4 w-4 mr-2" />
+            Code Block
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 };
