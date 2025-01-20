@@ -1,101 +1,8 @@
 import OpenAI from "openai";
 import { db } from "@db";
 import { eq, and } from "drizzle-orm";
-import { settings, users, projects, todos, chats } from "@db/schema";
+import { users, projects, todos, chats } from "@db/schema";
 import { createEmbedding } from './embeddings';
-
-// Task filtering functions - used by routes.ts only
-export function isEmptyTaskResponse(text: string): boolean {
-  if (!text || typeof text !== 'string') {
-    console.log('Empty task check: Invalid or empty input');
-    return true;
-  }
-
-  const trimmedText = text.trim().toLowerCase();
-  if (!trimmedText) {
-    console.log('Empty task check: Empty after trimming');
-    return true;
-  }
-
-  const excludedPhrases = [
-    "no task",
-    "no tasks",
-    "no deliverable",
-    "no deliverables",
-    "no tasks identified",
-    "no deliverables identified",
-    "no tasks or deliverables",
-    "no tasks or deliverables identified",
-    "no specific tasks",
-    "no specific deliverables",
-    "none identified",
-    "could not identify",
-    "unable to identify",
-    "no action items",
-    "no actions",
-  ];
-
-  if (excludedPhrases.includes(trimmedText)) {
-    console.log('Empty task check: Exact match found:', trimmedText);
-    return true;
-  }
-
-  const hasPhrase = excludedPhrases.some(phrase => {
-    const includes = trimmedText.includes(phrase);
-    if (includes) {
-      console.log('Empty task check: Phrase match found:', phrase, 'in:', trimmedText);
-    }
-    return includes;
-  });
-
-  const containsOnlyPunctuation = /^[\s\.,!?:;-]*$/.test(trimmedText);
-  if (containsOnlyPunctuation) {
-    console.log('Empty task check: Contains only punctuation');
-    return true;
-  }
-
-  const patternChecks = [
-    /^no\s+.*\s+found/i,
-    /^could\s+not\s+.*\s+any/i,
-    /^unable\s+to\s+.*\s+any/i,
-    /^did\s+not\s+.*\s+any/i,
-    /^doesn't\s+.*\s+any/i,
-    /^does\s+not\s+.*\s+any/i,
-    /^none\s+.*\s+found/i,
-    /^no\s+.*\s+identified/i,
-  ];
-
-  const matchesPattern = patternChecks.some(pattern => {
-    const matches = pattern.test(trimmedText);
-    if (matches) {
-      console.log('Empty task check: Pattern match found:', pattern, 'in:', trimmedText);
-    }
-    return matches;
-  });
-
-  return hasPhrase || matchesPattern;
-}
-
-export async function cleanupEmptyTasks(projectId: number): Promise<void> {
-  try {
-    const projectTodos = await db.query.todos.findMany({
-      where: eq(todos.projectId, projectId),
-    });
-
-    for (const todo of projectTodos) {
-      if (isEmptyTaskResponse(todo.text)) {
-        console.log('Cleanup: Removing task that indicates no tasks:', todo.text);
-        await db.delete(todos)
-          .where(and(
-            eq(todos.id, todo.id),
-            eq(todos.projectId, projectId)
-          ));
-      }
-    }
-  } catch (error) {
-    console.error('Error during task cleanup:', error);
-  }
-}
 
 interface ChatOptions {
   userId: number;
@@ -129,7 +36,7 @@ export async function createChatCompletion({
     apiKey,
   });
 
-  // Get project data for formatting context
+  // Get project data and user's note
   let projectData = null;
   if (context?.projectId) {
     const project = await db.query.projects.findFirst({
@@ -146,53 +53,35 @@ export async function createChatCompletion({
     if (project) {
       const noteContent = project.note?.content || '';
 
-      // Analyze note format
-      const formatAnalysis = {
-        paragraphStyle: noteContent.includes('\n\n') ? 'double' : 'single',
-        bulletStyle: noteContent.includes('•') ? '•' : 
-                    noteContent.includes('-') ? '-' : 
-                    noteContent.includes('*') ? '*' : null,
-        hasNumberedLists: /^\d+\.\s/m.test(noteContent),
-        headingStyle: /^#+\s/m.test(noteContent) ? 'markdown' :
-                     /^[A-Z][^.\n]+:\n/m.test(noteContent) ? 'text' : null,
-        indentation: noteContent.match(/^(\s+)/m)?.[1].length || 0
-      };
-
       projectData = {
         title: project.title,
         transcription: project.transcription,
         summary: project.summary,
         note: noteContent,
-        formatAnalysis
       };
     }
   }
 
-  // Use user's custom processing prompt or default
-  const processingPrompt = user.defaultPrompt?.trim();
-
-  // Build system message focused on format matching and conciseness
-  let systemMessage = processingPrompt || `You are enhancing user notes based on meeting transcripts. Follow these strict guidelines:
-
-Format Matching:
-${projectData?.formatAnalysis ? `
-• Use ${projectData.formatAnalysis.paragraphStyle} paragraph spacing
-${projectData.formatAnalysis.bulletStyle ? `• Use "${projectData.formatAnalysis.bulletStyle}" for bullet points` : ''}
-${projectData.formatAnalysis.hasNumberedLists ? '• Maintain numbered list formatting' : ''}
-${projectData.formatAnalysis.headingStyle ? `• Use ${projectData.formatAnalysis.headingStyle} style headings` : ''}
-${projectData.formatAnalysis.indentation ? `• Maintain ${projectData.formatAnalysis.indentation} space indentation` : ''}
-` : ''}
-
-Content Rules:
-1. Only add relevant context from the transcript that directly relates to the user's notes
-2. Keep additions brief - max 1-2 sentences per point
-3. Maintain the user's writing style and format exactly
-4. Focus on clarifying and expanding existing points
-5. Do not add unrelated information
-6. Use paragraph breaks and formatting that matches the user's style`;
-
+  // The user's note becomes the primary structure for the prompt
+  let systemMessage = '';
   if (projectData?.note) {
-    systemMessage += `\n\nUser's Current Note:\n${projectData.note}`;
+    systemMessage = `You are assisting with a meeting recording. The user has written the following notes:
+
+${projectData.note}
+
+Your task is to ONLY address and enhance these specific points from the user's notes using the recording's transcript. Follow these strict rules:
+
+1. ONLY respond to the questions and points raised in the user's notes above
+2. Keep the exact same format as the user's notes
+3. Each answer should be brief and direct - maximum 1-2 sentences
+4. Do not add any information that doesn't directly answer the user's notes
+5. Preserve any question format if the user wrote questions
+6. Use the same style of bullet points or numbering as the user's notes
+
+Focus exclusively on finding specific answers from the transcript for each point in the user's notes. Do not add any general summaries or unrelated information.`;
+  } else {
+    // Fallback to user's custom prompt or default
+    systemMessage = user.defaultPrompt?.trim() || `Create a brief, structured summary of the key points from the transcript. Use bullet points and keep each point to 1-2 sentences.`;
   }
 
   try {
@@ -200,9 +89,14 @@ Content Rules:
       model: "gpt-4",
       messages: [
         { role: "system", content: systemMessage },
-        { role: "user", content: message }
+        { 
+          role: "user", 
+          content: projectData?.transcription 
+            ? `Please address each point/question from my notes using this transcript:\n\n${projectData.transcription}`
+            : message
+        }
       ],
-      temperature: 0.7,
+      temperature: 0.3, // Lower temperature for more focused responses
       max_tokens: 500,
     });
 
@@ -247,7 +141,7 @@ Content Rules:
       message: assistantResponse,
       context: {
         hasUserNote: !!projectData?.note,
-        formatAnalysis: projectData?.formatAnalysis
+        isEnhancingUserNote: true
       }
     };
   } catch (error: any) {
