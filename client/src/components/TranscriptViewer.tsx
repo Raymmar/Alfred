@@ -176,10 +176,7 @@ export function TranscriptViewer({
                   "transition-colors",
                   segment.isChapter ? "mt-6 mb-2" : "my-1",
                   segment.isNewParagraph ? "mt-4" : "",
-                  !segment.isChapter && currentTime >= segment.start && currentTime < segment.end
-                    ? "bg-primary/10 text-primary"
-                    : "hover:bg-muted",
-                  "rounded cursor-pointer p-2"
+                  "hover:bg-muted rounded cursor-pointer p-2"
                 )}
               >
                 {segment.isChapter ? (
