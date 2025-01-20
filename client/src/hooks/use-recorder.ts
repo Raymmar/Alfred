@@ -6,17 +6,11 @@ interface RecorderOptions {
   waveformRef?: HTMLDivElement | null;
 }
 
-// Optimized constants for better chunk management
-const CHUNK_INTERVAL = 60000; // Save every 1 minute for better granularity
-const MAX_CHUNKS_IN_MEMORY = 2; // Reduce memory usage
-const MAX_CHUNK_SIZE = 10 * 1024 * 1024; // 10MB per chunk
-const MAX_TOTAL_SIZE = 500 * 1024 * 1024; // 500MB total limit
-const UPLOAD_RETRY_ATTEMPTS = 3;
-const UPLOAD_RETRY_DELAY = 1000; // 1 second
+const CHUNK_INTERVAL = 300000; // Save every 5 minutes
+const MAX_CHUNKS_IN_MEMORY = 3; // Keep only last 3 chunks in memory
 
 export function useRecorder() {
   const [isRecording, setIsRecording] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const mediaStream = useRef<MediaStream | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
@@ -29,12 +23,8 @@ export function useRecorder() {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const chunkInterval = useRef<NodeJS.Timeout>();
   const uploadedChunks = useRef<string[]>([]);
-  const totalSize = useRef<number>(0);
 
-  // Enhanced cleanup with error handling
   const cleanup = useCallback((stopTracks = false) => {
-    console.log('Starting cleanup process');
-
     if (chunkInterval.current) {
       clearInterval(chunkInterval.current);
       chunkInterval.current = undefined;
@@ -93,25 +83,10 @@ export function useRecorder() {
     dataArray.current = null;
     chunks.current = [];
     uploadedChunks.current = [];
-    totalSize.current = 0;
-    setUploadProgress(0);
     setIsRecording(false);
-
-    console.log('Cleanup completed');
   }, []);
 
-  // Optimized chunk upload with retries and progress tracking
   const uploadChunk = async (audioBlob: Blob, isLastChunk = false): Promise<string> => {
-    const chunkSize = audioBlob.size;
-
-    if (chunkSize > MAX_CHUNK_SIZE) {
-      throw new Error(`Chunk size (${chunkSize}) exceeds maximum allowed size (${MAX_CHUNK_SIZE})`);
-    }
-
-    if (totalSize.current + chunkSize > MAX_TOTAL_SIZE) {
-      throw new Error(`Total recording size would exceed maximum allowed size (${MAX_TOTAL_SIZE})`);
-    }
-
     const formData = new FormData();
     const timestamp = Date.now();
     const filename = `recording-${timestamp}-${isLastChunk ? 'final' : 'chunk'}.webm`;
@@ -122,40 +97,25 @@ export function useRecorder() {
       formData.append('previousChunks', JSON.stringify(uploadedChunks.current));
     }
 
-    for (let attempt = 1; attempt <= UPLOAD_RETRY_ATTEMPTS; attempt++) {
-      try {
-        const response = await fetch('/api/recordings/upload', {
-          method: 'POST',
-          body: formData,
-        });
+    try {
+      const response = await fetch('/api/recordings/upload', {
+        method: 'POST',
+        body: formData,
+      });
 
-        if (!response.ok) {
-          throw new Error(`Upload failed with status: ${response.status}`);
-        }
-
-        const { filename: savedFilename } = await response.json();
-        uploadedChunks.current.push(savedFilename);
-        totalSize.current += chunkSize;
-
-        // Update progress
-        const progress = (totalSize.current / MAX_TOTAL_SIZE) * 100;
-        setUploadProgress(Math.min(progress, 100));
-
-        console.log(`Chunk uploaded successfully (${chunkSize} bytes), total: ${totalSize.current}`);
-        return savedFilename;
-      } catch (error) {
-        console.error(`Upload attempt ${attempt} failed:`, error);
-        if (attempt === UPLOAD_RETRY_ATTEMPTS) {
-          throw error;
-        }
-        await new Promise(resolve => setTimeout(resolve, UPLOAD_RETRY_DELAY));
+      if (!response.ok) {
+        throw new Error('Failed to upload chunk');
       }
-    }
 
-    throw new Error('Upload failed after all retry attempts');
+      const { filename: savedFilename } = await response.json();
+      uploadedChunks.current.push(savedFilename);
+      return savedFilename;
+    } catch (error) {
+      console.error('Error uploading chunk:', error);
+      throw error;
+    }
   };
 
-  // Optimized chunk saving with validation
   const saveCurrentChunk = async () => {
     if (chunks.current.length === 0) return;
 
@@ -163,14 +123,9 @@ export function useRecorder() {
     if (currentBlob.size === 0) return;
 
     try {
-      console.log(`Processing chunk of size: ${currentBlob.size} bytes`);
       await uploadChunk(currentBlob);
+      // Clear memory after successful upload
       chunks.current = [];
-
-      // Force garbage collection hint
-      if (global.gc) {
-        global.gc();
-      }
     } catch (error) {
       console.error('Error saving chunk:', error);
       throw error;
@@ -292,8 +247,6 @@ export function useRecorder() {
 
       chunks.current = [];
       uploadedChunks.current = [];
-      totalSize.current = 0;
-      setUploadProgress(0);
 
       recorder.ondataavailable = (event: BlobEvent) => {
         if (event.data.size > 0) {
@@ -350,7 +303,7 @@ export function useRecorder() {
       mediaRecorder.current.onstop = async () => {
         try {
           // Save any remaining chunks
-          const finalBlob = new Blob(chunks.current, {
+          const finalBlob = new Blob(chunks.current, { 
             type: 'audio/webm;codecs=opus'
           });
 
@@ -382,7 +335,6 @@ export function useRecorder() {
 
   return {
     isRecording,
-    uploadProgress,
     startRecording,
     stopRecording,
   };

@@ -58,21 +58,16 @@ async function processAudio(projectId: number): Promise<RequestResult<SelectProj
     const response = await fetch(`/api/projects/${projectId}/process`, {
       method: 'POST',
       credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ projectId }),
     });
 
+    const data = await response.json();
+
     if (!response.ok) {
-      const errorData = await response.json();
       return { 
         ok: false, 
-        message: errorData.message || response.statusText 
+        message: data.message || response.statusText 
       };
     }
-
-    const data = await response.json();
 
     // Additional validation of tasks in the response
     if (data.todos) {
@@ -92,7 +87,7 @@ async function processAudio(projectId: number): Promise<RequestResult<SelectProj
     console.error('Audio processing error:', e);
     return { 
       ok: false, 
-      message: e.message || 'An unexpected error occurred while processing audio' 
+      message: e.message || 'An unexpected error occurred' 
     };
   }
 }

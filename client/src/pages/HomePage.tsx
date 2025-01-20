@@ -2,8 +2,8 @@ import { useState, useRef, useEffect } from "react";
 import { useRecorder } from "@/hooks/use-recorder";
 import { useMediaDevices } from "@/hooks/use-media-devices";
 import { useProjects } from "@/hooks/use-projects";
-import { useSettings } from "@/hooks/use-settings";
 import { useAudioProcessing } from "@/hooks/use-audio-processing";
+import { useSettings } from "@/hooks/use-settings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
@@ -63,9 +63,8 @@ export default function HomePage() {
   const [recordingTime, setRecordingTime] = useState<number>(0);
   const [isSaving, setIsSaving] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<number>(0);
   const recordingTimer = useRef<NodeJS.Timeout>();
-  const { startRecording, stopRecording, uploadProgress: recorderProgress } = useRecorder();
+  const { startRecording, stopRecording } = useRecorder();
   const { processAudio, isProcessing: isAudioProcessing } = useAudioProcessing();
   const defaultNoteRef = useRef<string>('');
   const {
@@ -109,15 +108,12 @@ export default function HomePage() {
     };
   }, [isRecording]);
 
-  useEffect(() => {
-    setUploadProgress(recorderProgress);
-  }, [recorderProgress]);
-
   const { projects: projectsData, createProject, deleteProject, renameProject } = useProjects();
   const [convertingStates, setConvertingStates] = useState<Record<number, boolean>>({});
 
   const projects = projectsData
     .filter(p => {
+      // Always filter out personal projects from recordings list
       return p.recordingUrl !== 'personal.none';
     })
     .map(p => ({
@@ -163,8 +159,6 @@ export default function HomePage() {
       });
 
       setIsRecording(true);
-      setUploadProgress(0);
-
       await startRecording({
         audioDeviceId: selectedAudioInput,
         waveformRef: recordingWaveformRef.current,
@@ -172,7 +166,7 @@ export default function HomePage() {
 
       toast({
         title: "Recording started",
-        description: "Recording audio. Chunks will be saved automatically.",
+        description: "Recording audio. Click stop when you're finished.",
       });
     } catch (error: any) {
       console.error('Recording error:', error);
@@ -182,7 +176,6 @@ export default function HomePage() {
         variant: "destructive",
       });
       setIsRecording(false);
-      setUploadProgress(0);
     }
   };
 
@@ -245,7 +238,6 @@ export default function HomePage() {
     } finally {
       setIsSaving(false);
       setIsProcessing(false);
-      setUploadProgress(0);
     }
   };
 
@@ -279,43 +271,6 @@ export default function HomePage() {
     setLocation('/');
   };
 
-  const recordingButton = (
-    <Button
-      size="lg"
-      variant={isRecording ? "destructive" : "default"}
-      onClick={isRecording ? handleStopRecording : handleStartRecording}
-      className="w-full relative"
-      disabled={!selectedAudioInput || isProcessing || isSaving || isAudioProcessing}
-    >
-      {isProcessing || isSaving || isAudioProcessing ? (
-        <>
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          {isSaving ? (
-            <>
-              Saving... {uploadProgress > 0 && `(${Math.round(uploadProgress)}%)`}
-            </>
-          ) : isAudioProcessing ? (
-            "Processing Audio..."
-          ) : (
-            "Processing..."
-          )}
-        </>
-      ) : isRecording ? (
-        <>
-          <StopCircle className="mr-2 h-4 w-4" />
-          Stop Recording ({String(Math.floor(recordingTime / 60)).padStart(2, '0')}:{String(recordingTime % 60).padStart(2, '0')})
-          {uploadProgress > 0 && ` (${Math.round(uploadProgress)}%)`}
-        </>
-      ) : (
-        <>
-          <Mic className="mr-2 h-4 w-4" />
-          {!selectedAudioInput ? "Select a microphone to start" : "Start Recording"}
-        </>
-      )}
-    </Button>
-  );
-
-
   return (
     <div className="flex flex-col h-screen">
       <Navigation />
@@ -325,7 +280,30 @@ export default function HomePage() {
             <div className="flex flex-col h-full">
               {!selectedProject && (
                 <div className="p-4">
-                  {recordingButton}
+                  <Button
+                    size="lg"
+                    variant={isRecording ? "destructive" : "default"}
+                    onClick={isRecording ? handleStopRecording : handleStartRecording}
+                    className="w-full relative"
+                    disabled={!selectedAudioInput || isProcessing || isSaving || isAudioProcessing}
+                  >
+                    {isProcessing || isSaving || isAudioProcessing ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        {isSaving ? "Saving..." : isAudioProcessing ? "Processing Audio..." : "Processing..."}
+                      </>
+                    ) : isRecording ? (
+                      <>
+                        <StopCircle className="mr-2 h-4 w-4" />
+                        Stop Recording ({String(Math.floor(recordingTime / 60)).padStart(2, '0')}:{String(recordingTime % 60).padStart(2, '0')})
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="mr-2 h-4 w-4" />
+                        {!selectedAudioInput ? "Select a microphone to start" : "Start Recording"}
+                      </>
+                    )}
+                  </Button>
 
                   <div className="mt-4">
                     <Select
