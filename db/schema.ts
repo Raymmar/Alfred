@@ -10,7 +10,7 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   openaiApiKey: text("openai_api_key"),
   defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
-  todoPrompt: text("todo_prompt").default(""),
+  todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
   storageLocation: text("storage_location"),
 });
 
