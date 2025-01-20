@@ -270,9 +270,16 @@ export function NoteEditor({
       }),
       Subscript,
       Superscript,
-      TaskList,
+      TaskList.configure({
+        HTMLAttributes: {
+          class: 'not-prose pl-2',
+        },
+      }),
       TaskItem.configure({
         nested: true,
+        HTMLAttributes: {
+          class: 'flex items-start my-4',
+        },
       }),
       CharacterCount.configure({
         limit: 10000,
