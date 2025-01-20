@@ -92,18 +92,7 @@
 
 .ProseMirror li p,
 .prose li p {
-  margin: 0 !important;
-}
-
-.ProseMirror li[data-type="taskItem"] {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-}
-
-.ProseMirror li[data-type="taskItem"] p {
-  margin: 0 !important;
-  padding: 0 !important;
+  margin: .25rem !important;
 }
 
 /* Reset any additional prose margins */
