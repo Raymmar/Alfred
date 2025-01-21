@@ -6,6 +6,7 @@ import { updateChatContext, createEmbedding } from './embeddings';
 import { findRecommendedTasks } from './embeddings';
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 import { marked } from 'marked';
+import { createReadStream } from 'fs';
 
 interface WhisperResponse {
   text: string;
@@ -19,21 +20,8 @@ interface WhisperResponse {
 }
 
 // Model configurations
-const WHISPER_MODEL = "whisper-1";  // Note: Using standard model as diarization is handled by configuration
+const WHISPER_MODEL = "whisper-1";
 const CHAT_MODEL = "gpt-4";
-
-// Add these configuration options for Whisper
-const WHISPER_CONFIG = {
-  language: "en",
-  response_format: "verbose_json",
-  temperature: 0,
-  diarization: {
-    enabled: true,
-    min_speakers: 1,
-    max_speakers: 6,
-    speaker_labels: true
-  }
-};
 
 // Configure marked for clean HTML output compatible with TipTap and our styling
 marked.setOptions({
@@ -433,24 +421,42 @@ function formatContextForPrompt(enhancedContext: any[]): string {
     .join('\n\n');
 }
 
-// Add the transcribe function that uses the new diarization config
-export async function transcribeAudio(audioFile: string | Buffer, openAiKey: string): Promise<WhisperResponse> {
+// Add the transcribe function with proper file handling
+export async function transcribeAudio(audioFilePath: string, openAiKey: string): Promise<WhisperResponse> {
   const openai = new OpenAI({ apiKey: openAiKey });
 
   try {
-    const response = await openai.audio.transcriptions.create({
-      file: audioFile,
+    console.log('Starting audio transcription:', {
       model: WHISPER_MODEL,
-      language: WHISPER_CONFIG.language,
-      response_format: WHISPER_CONFIG.response_format,
-      temperature: WHISPER_CONFIG.temperature,
-      // @ts-ignore - The type definitions don't include diarization yet
-      diarization: WHISPER_CONFIG.diarization
+      file: audioFilePath
     });
 
-    return response as unknown as WhisperResponse;
+    // Create a readable stream from the file
+    const audioFileStream = createReadStream(audioFilePath);
+
+    const transcription = await openai.audio.transcriptions.create({
+      file: audioFileStream,
+      model: WHISPER_MODEL,
+      language: "en",
+      response_format: "verbose_json",
+      timestamp_granularities: ["segment", "word"],
+      // Ask for word-level timestamps for better turn detection
+      word_timestamps: true,
+      // Request speaker detection if possible
+      prompt: "Detect different speakers and label them as Speaker 1, Speaker 2, etc."
+    });
+
+    console.log('Transcription completed:', {
+      success: true,
+      hasSegments: Array.isArray(transcription.segments),
+      segmentCount: transcription.segments?.length
+    });
+
+    return transcription as unknown as WhisperResponse;
   } catch (error: any) {
     console.error("Error transcribing audio:", error);
-    throw new Error(error.message || "Failed to transcribe audio");
+    throw new Error(
+      error.message || "Failed to transcribe audio"
+    );
   }
 }
