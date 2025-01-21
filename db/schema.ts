@@ -27,9 +27,10 @@ export const settings = pgTable("settings", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// Projects table with proper relations
 export const projects = pgTable("projects", {
   id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
   title: text("title").notNull(),
   description: text("description"),
   recordingUrl: text("recording_url"),
@@ -47,26 +48,30 @@ export const notes = pgTable("notes", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// Updated kanban columns with proper user relation
 export const kanbanColumns = pgTable("kanban_columns", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
   title: text("title").notNull(),
   order: integer("order").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// Updated todos with proper relations
 export const todos = pgTable("todos", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
   projectId: integer("project_id").references(() => projects.id, { onDelete: 'cascade' }),
+  columnId: integer("column_id").references(() => kanbanColumns.id, { onDelete: 'set null' }),
   text: text("text").notNull(),
   completed: boolean("completed").default(false),
-  columnId: integer("column_id").references(() => kanbanColumns.id),
   order: integer("order").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// Updated chats table with proper cascade
 export const chats = pgTable("chats", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -76,24 +81,22 @@ export const chats = pgTable("chats", {
   timestamp: timestamp("timestamp").notNull().defaultNow(),
 });
 
-// Define embeddings table without vector type for now
-// We'll need to add pgvector extension support separately
 export const embeddings = pgTable("embeddings", {
   id: serial("id").primaryKey(),
   contentType: text("content_type").notNull(),
   contentId: integer("content_id").notNull(),
   contentText: text("content_text").notNull(),
-  embedding: text("embedding").notNull(), // Store as JSON string temporarily
+  embedding: text("embedding").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
-// Relations
-export const userRelations = relations(users, ({ many, one }) => ({
+// Update relations to include proper references
+
+export const userRelations = relations(users, ({ many }) => ({
   projects: many(projects),
-  settings: one(settings, {
-    fields: [users.id],
-    references: [settings.userId],
-  }),
+  todos: many(todos),
+  kanbanColumns: many(kanbanColumns),
+  chats: many(chats),
 }));
 
 export const settingsRelations = relations(settings, ({ one }) => ({
@@ -123,6 +126,10 @@ export const notesRelations = relations(notes, ({ one }) => ({
 }));
 
 export const todosRelations = relations(todos, ({ one }) => ({
+  user: one(users, {
+    fields: [todos.userId],
+    references: [users.id],
+  }),
   project: one(projects, {
     fields: [todos.projectId],
     references: [projects.id],
@@ -133,8 +140,12 @@ export const todosRelations = relations(todos, ({ one }) => ({
   }),
 }));
 
-export const kanbanColumnsRelations = relations(kanbanColumns, ({ many }) => ({
+export const kanbanColumnsRelations = relations(kanbanColumns, ({ many, one }) => ({
   todos: many(todos),
+  user: one(users, {
+    fields: [kanbanColumns.userId],
+    references: [users.id],
+  }),
 }));
 
 export const chatRelations = relations(chats, ({ one }) => ({
@@ -166,7 +177,6 @@ export const embeddingsRelations = relations(embeddings, ({ one }) => ({
   }),
 }));
 
-// Schema exports
 export const insertUserSchema = createInsertSchema(users);
 export const selectUserSchema = createSelectSchema(users);
 export type InsertUser = typeof users.$inferInsert;
