@@ -25,7 +25,7 @@ export const settings = pgTable("settings", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Projects table 
+// Projects table with recordings and processing results
 export const projects = pgTable("projects", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -38,6 +38,7 @@ export const projects = pgTable("projects", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// Notes table with proper project reference
 export const notes = pgTable("notes", {
   id: serial("id").primaryKey(),
   projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
@@ -46,7 +47,7 @@ export const notes = pgTable("notes", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Kanban columns
+// Kanban columns with user reference
 export const kanbanColumns = pgTable("kanban_columns", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -69,7 +70,7 @@ export const todos = pgTable("todos", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Chats table
+// Chats table with project reference
 export const chats = pgTable("chats", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -79,6 +80,7 @@ export const chats = pgTable("chats", {
   timestamp: timestamp("timestamp").notNull().defaultNow(),
 });
 
+// Embeddings table for semantic search
 export const embeddings = pgTable("embeddings", {
   id: serial("id").primaryKey(),
   contentType: text("content_type").notNull(),
@@ -88,7 +90,7 @@ export const embeddings = pgTable("embeddings", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
-// Relations
+// Define relations
 export const userRelations = relations(users, ({ many }) => ({
   projects: many(projects),
   todos: many(todos),
@@ -109,9 +111,16 @@ export const projectRelations = relations(projects, ({ one, many }) => ({
     fields: [projects.userId],
     references: [users.id],
   }),
-  todos: many(todos),
   notes: many(notes),
+  todos: many(todos),
   chats: many(chats),
+}));
+
+export const noteRelations = relations(notes, ({ one }) => ({
+  project: one(projects, {
+    fields: [notes.projectId],
+    references: [projects.id],
+  }),
 }));
 
 export const todoRelations = relations(todos, ({ one }) => ({
@@ -148,32 +157,6 @@ export const chatRelations = relations(chats, ({ one }) => ({
   }),
 }));
 
-export const notesRelations = relations(notes, ({ one }) => ({
-  project: one(projects, {
-    fields: [notes.projectId],
-    references: [projects.id],
-  }),
-}));
-
-export const embeddingsRelations = relations(embeddings, ({ one }) => ({
-  project: one(projects, {
-    fields: [embeddings.contentId],
-    references: [projects.id],
-    relationName: "project_embeddings",
-  }),
-  chat: one(chats, {
-    fields: [embeddings.contentId],
-    references: [chats.id],
-    relationName: "chat_embeddings",
-  }),
-  todo: one(todos, {
-    fields: [embeddings.contentId],
-    references: [todos.id],
-    relationName: "todo_embeddings",
-  }),
-}));
-
-
 // Export schemas
 export const insertUserSchema = createInsertSchema(users);
 export const selectUserSchema = createSelectSchema(users);
@@ -190,6 +173,11 @@ export const selectProjectSchema = createSelectSchema(projects);
 export type InsertProject = typeof projects.$inferInsert;
 export type SelectProject = typeof projects.$inferSelect;
 
+export const insertNoteSchema = createInsertSchema(notes);
+export const selectNoteSchema = createSelectSchema(notes);
+export type InsertNote = typeof notes.$inferInsert;
+export type SelectNote = typeof notes.$inferSelect;
+
 export const insertTodoSchema = createInsertSchema(todos);
 export const selectTodoSchema = createSelectSchema(todos);
 export type InsertTodo = typeof todos.$inferInsert;
@@ -199,11 +187,6 @@ export const insertKanbanColumnSchema = createInsertSchema(kanbanColumns);
 export const selectKanbanColumnSchema = createSelectSchema(kanbanColumns);
 export type InsertKanbanColumn = typeof kanbanColumns.$inferInsert;
 export type SelectKanbanColumn = typeof kanbanColumns.$inferSelect;
-
-export const insertNoteSchema = createInsertSchema(notes);
-export const selectNoteSchema = createSelectSchema(notes);
-export type InsertNote = typeof notes.$inferInsert;
-export type SelectNote = typeof notes.$inferSelect;
 
 export const insertChatSchema = createInsertSchema(chats);
 export const selectChatSchema = createSelectSchema(chats);
