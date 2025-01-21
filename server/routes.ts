@@ -8,16 +8,18 @@ import {
   todos,
   notes,
   chats,
-  kanbanColumns,
+  kanbanColumns
 } from "@db/schema";
-import { desc, eq, and, asc } from "drizzle-orm";
+import { desc, eq, and, asc, or } from "drizzle-orm";
 import formidable from "formidable";
 import { spawn } from "child_process";
 import express from "express";
-import path from "path";
-import fs from "fs";
-import { ensureStorageDirectory, getRecordingsPath, cleanupOrphanedRecordings, getAudioContentType } from "./storage";
-import { createAIServices } from "./lib/ai";
+import path, { join } from "path";
+import fs, { existsSync } from "fs";
+import { ensureStorageDirectory, getRecordingsPath, cleanupOrphanedRecordings, getAudioContentType, isValidAudioFile } from "./storage";
+import { createChatCompletion } from "./lib/openai";
+import { RequestHandler } from "express-serve-static-core";
+import OpenAI from "openai";
 
 function isEmptyTaskResponse(text: string): boolean {
   const trimmedText = text.trim().toLowerCase();
@@ -414,53 +416,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
     app.post("/api/chat", requireAuth, async (req: AuthRequest, res: Response) => {
-      try {
-        const { message } = req.body;
+        try {
+          const { message } = req.body;
 
-        if (typeof message !== "string" || !message.trim()) {
-          return res.status(400).json({ message: "Invalid message" });
-        }
+          if (typeof message !== "string" || !message.trim()) {
+            return res.status(400).json({ message: "Invalid message" });
+          }
 
-        const aiServices = await createAIServices(req.user!.id);
+          const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
+            const [userMsg] = await tx.insert(chats).values({
+              userId: req.user!.id,
+              role: "user",
+              content: message.trim(),
+              projectId: null,
+              timestamp: new Date(),
+            }).returning();
 
-        const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
-          const [userMsg] = await tx.insert(chats).values({
-            userId: req.user!.id,
-            role: "user",
-            content: message.trim(),
-            projectId: null,
-            timestamp: new Date(),
-          }).returning();
+            const aiResponse = await createChatCompletion({
+              userId: req.user!.id,
+              message: message.trim(),
+            });
 
-          const aiResponse = await aiServices.chat.createChatCompletion({
-            userId: req.user!.id,
-            message: message.trim(),
+            const [assistantMsg] = await tx.insert(chats).values({
+              userId: req.user!.id,
+              role: "assistant",
+              content: aiResponse.message,
+              projectId: null,
+              timestamp: new Date(),
+            }).returning();
+
+            return [userMsg, assistantMsg];
           });
 
-          const [assistantMsg] = await tx.insert(chats).values({
-            userId: req.user!.id,
-            role: "assistant",
-            content: aiResponse.message,
-            projectId: null,
-            timestamp: new Date(),
-          }).returning();
+          res.json({
+            message: assistantMessage.content,
+            messages: [userMessage, assistantMessage]
+          });
 
-          return [userMsg, assistantMsg];
-        });
-
-        res.json({
-          message: assistantMessage.content,
-          messages: [userMessage, assistantMessage]
-        });
-
-      } catch (error: any) {
-        console.error("Chat error:", error);
-        res.status(500).json({
-          message: error.message || "Failed to generate response",
-        });
-      }
-    });
-
+        } catch (error: any) {
+          console.error("Chat error:", error);
+          res.status(500).json({
+            message: error.message || "Failed to generate response",
+          });
+        }
+      });
     app.get("/api/projects/:projectId/messages", requireAuth, async (req: AuthRequest, res: Response) => {
         try {
           const projectId = parseInt(req.params.projectId);
@@ -496,69 +495,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
     app.post("/api/projects/:projectId/chat", requireAuth, async (req: AuthRequest, res: Response) => {
-      try {
-        const projectId = parseInt(req.params.projectId);
-        if (isNaN(projectId)) {
-          return res.status(400).json({ message: "Invalid project ID" });
+        try {
+          const projectId = parseInt(req.params.projectId);
+          if (isNaN(projectId)) {
+            return res.status(400).json({ message: "Invalid project ID" });
+          }
+
+          const { message } = req.body;
+          if (typeof message !== "string" || !message.trim()) {
+            return res.status(400).json({ message: "Invalid message" });
+          }
+
+          const [project] = await db.query.projects.findMany({
+            where: eq(projects.id, projectId),
+            limit: 1,
+          });
+
+          if (!project) {
+            return res.status(404).json({ message: "Project not found" });
+          }
+
+          if (project.userId !== req.user!.id) {
+            return res.status(403).json({ message: "Not authorized" });
+          }
+
+          const [userMessage] = await db.insert(chats).values({
+            userId: req.user!.id,
+            projectId,
+            role: "user",
+            content: message.trim(),
+            timestamp: new Date(),
+          }).returning();
+
+          const aiResponse = await createChatCompletion({
+            userId: req.user!.id,
+            message: message.trim(),
+            context: {
+              transcription: project.transcription,
+              summary: project.summary,
+              notes: project.notes,
+            },
+          });
+
+          const [assistantMessage] = await db.insert(chats).values({
+            userId: req.user!.id,
+            projectId,
+            role: "assistant",
+            content: aiResponse.message,
+            timestamp: new Date(),
+          }).returning();
+
+          res.json({
+            message: aiResponse.message,
+            messages: [userMessage, assistantMessage]
+          });
+        } catch (error: any) {
+          console.error("Project chat error:", error);
+          res.status(500).json({
+            message: error.message || "Failed to generate response",
+          });
         }
-
-        const { message } = req.body;
-        if (typeof message !== "string" || !message.trim()) {
-          return res.status(400).json({ message: "Invalid message" });
-        }
-
-        const [project] = await db.query.projects.findMany({
-          where: eq(projects.id, projectId),
-          limit: 1,
-        });
-
-        if (!project) {
-          return res.status(404).json({ message: "Project not found" });
-        }
-
-        if (project.userId !== req.user!.id) {
-          return res.status(403).json({ message: "Not authorized" });
-        }
-
-        const aiServices = await createAIServices(req.user!.id);
-
-        const [userMessage] = await db.insert(chats).values({
-          userId: req.user!.id,
-          projectId,
-          role: "user",
-          content: message.trim(),
-          timestamp: new Date(),
-        }).returning();
-
-        const aiResponse = await aiServices.chat.createChatCompletion({
-          userId: req.user!.id,
-          message: message.trim(),
-          context: {
-            transcription: project.transcription,
-            summary: project.summary,
-            projectId
-          },
-        });
-
-        const [assistantMessage] = await db.insert(chats).values({
-          userId: req.user!.id,
-          projectId,
-          role: "assistant",
-          content: aiResponse.message,
-          timestamp: new Date(),
-        }).returning();
-
-        res.json({
-          message: aiResponse.message,
-          messages: [userMessage, assistantMessage]
-        });
-      } catch (error: any) {
-        console.error("Project chat error:", error);
-        res.status(500).json({
-          message: error.message || "Failed to generate response",
-        });
-      }
-    });
+      });
 
     app.get(
       "/api/recordings/:filename/download",

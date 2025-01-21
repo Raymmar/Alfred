@@ -4,9 +4,8 @@ export * from './transcription';
 export * from './insights';
 export * from './tasks';
 export * from './chat';
-export * from './embeddings';
 
-// Factory function for creating all services
+// Factory functions for creating services
 export async function createAIServices(userId: number) {
   const [
     transcriptionService,
@@ -14,10 +13,10 @@ export async function createAIServices(userId: number) {
     taskExtractionService,
     chatService
   ] = await Promise.all([
-    TranscriptionService.create(userId),
-    InsightsService.create(userId),
-    TaskExtractionService.create(userId),
-    ChatService.create(userId)
+    createTranscriptionService(userId),
+    createInsightsService(userId),
+    createTaskExtractionService(userId),
+    createChatService(userId)
   ]);
 
   return {
