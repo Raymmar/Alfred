@@ -11,7 +11,6 @@ import { marked } from 'marked';
 marked.setOptions({
   gfm: true, // GitHub Flavored Markdown
   breaks: true, // Convert \n to <br>
-  mangle: false, // Don't escape HTML
   sanitize: false, // Don't sanitize HTML (we handle this on the frontend)
   headerPrefix: '', // Don't prefix headers
   headerIds: false, // Don't add IDs to headers
@@ -23,26 +22,16 @@ function convertMarkdownToHTML(markdown: string): string {
   if (!markdown) return '';
 
   try {
-    // Convert markdown to HTML
     const html = marked(markdown);
 
-    // Clean up HTML but preserve essential formatting
     return html
-      // Remove any style attributes
       .replace(/\sstyle="[^"]*"/g, '')
-      // Remove any class attributes
       .replace(/\sclass="[^"]*"/g, '')
-      // Clean up empty paragraphs
       .replace(/<p>\s*<\/p>/g, '')
-      // Remove any data attributes
       .replace(/\sdata-[^=]*="[^"]*"/g, '')
-      // Clean up multiple line breaks while preserving intentional spacing
       .replace(/(\r?\n){3,}/g, '\n\n')
-      // Ensure proper spacing around list items
       .replace(/<\/li><li>/g, '</li>\n<li>')
-      // Ensure proper spacing around headers
       .replace(/<\/h([1-6])><h([1-6])>/g, '</h$1>\n<h$2>')
-      // Normalize whitespace
       .trim();
   } catch (error) {
     console.error('Error converting markdown to HTML:', error);
@@ -50,7 +39,7 @@ function convertMarkdownToHTML(markdown: string): string {
   }
 }
 
-// Task filtering functions - used by routes.ts only
+// Task filtering functions
 export function isEmptyTaskResponse(text: string): boolean {
   if (!text || typeof text !== 'string') {
     console.log('Empty task check: Invalid or empty input');
@@ -81,13 +70,11 @@ export function isEmptyTaskResponse(text: string): boolean {
     "no actions",
   ];
 
-  // First check exact matches
   if (excludedPhrases.includes(trimmedText)) {
     console.log('Empty task check: Exact match found:', trimmedText);
     return true;
   }
 
-  // Then check for phrases within the text
   const hasPhrase = excludedPhrases.some(phrase => {
     const includes = trimmedText.includes(phrase);
     if (includes) {
@@ -96,14 +83,12 @@ export function isEmptyTaskResponse(text: string): boolean {
     return includes;
   });
 
-  // Check for common patterns that might indicate an empty task message
   const containsOnlyPunctuation = /^[\s\.,!?:;-]*$/.test(trimmedText);
   if (containsOnlyPunctuation) {
     console.log('Empty task check: Contains only punctuation');
     return true;
   }
 
-  // Additional pattern checks for empty task indicators
   const patternChecks = [
     /^no\s+.*\s+found/i,
     /^could\s+not\s+.*\s+any/i,
@@ -147,8 +132,7 @@ export async function cleanupEmptyTasks(projectId: number): Promise<void> {
   }
 }
 
-// the newest OpenAI model is "gpt-4o" which was released May 13, 2024. do not change this unless explicitly requested by the user
-const CHAT_MODEL = "gpt-4o";
+const CHAT_MODEL = "gpt-4";
 
 interface ChatOptions {
   userId: number;
@@ -167,6 +151,8 @@ export async function createChatCompletion({
   context,
   promptType = 'system'
 }: ChatOptions) {
+  console.log('Creating chat completion with:', { userId, promptType, contextLength: context ? Object.keys(context).length : 0 });
+
   const user = await db.query.users.findFirst({
     where: eq(users.id, userId),
   });
@@ -201,6 +187,8 @@ export async function createChatCompletion({
       ? primaryPrompt
       : systemPrompt;
 
+  console.log('Selected prompt type:', promptType);
+
   // If we have note content and this is a primary/summary prompt, include it
   if (promptType === 'primary' && context?.summary) {
     promptToUse = `${promptToUse}\n\nExisting Summary Content:\n${context.summary}`;
@@ -208,6 +196,13 @@ export async function createChatCompletion({
 
   const userData = await getContextData(userId);
   const { enhancedContext, similarityScore } = await updateChatContext(userId, message);
+
+  // Get recommended tasks
+  const { recommendations } = await findRecommendedTasks(userId, message, {
+    limit: 5,
+    minSimilarity: 0.5,
+    includeCompleted: false
+  });
 
   // Build system message with enhanced contextual awareness and selected prompt
   let systemMessage = `${promptToUse}\n\nDatabase Context:
@@ -240,13 +235,13 @@ Relevant Context:
 ${formatContextForPrompt(enhancedContext)}
 
 Recommended Tasks Based on Current Context:
-${recommendedTasks.length > 0
-    ? recommendedTasks.map(task =>
-      `- [${task.completed ? 'Completed' : 'Pending'}] ${task.text}${
-        task.projectTitle ? ` (Project: ${task.projectTitle})` : ''
-      }`
-    ).join('\n')
-    : 'No specifically relevant tasks found for this conversation.'}`;
+${recommendations && recommendations.length > 0
+  ? recommendations.map(task =>
+    `- [${task.completed ? 'Completed' : 'Pending'}] ${task.text}${
+      task.projectTitle ? ` (Project: ${task.projectTitle})` : ''
+    }`
+  ).join('\n')
+  : 'No specifically relevant tasks found for this conversation.'}`;
 
   // For project-specific chat, add focused context
   if (context?.projectId) {
@@ -267,6 +262,7 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
   }
 
   try {
+    console.log('Sending request to OpenAI...');
     const response = await openai.chat.completions.create({
       model: CHAT_MODEL,
       messages: [
@@ -278,14 +274,14 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
     });
 
     const assistantResponse = response.choices[0].message.content || "";
-    console.log('GPT response:', assistantResponse);
+    console.log('Received response from OpenAI');
 
     // Only convert to HTML if it's not a todo prompt
     const finalResponse = promptType === 'todo'
       ? assistantResponse  // Keep tasks as plain text
       : convertMarkdownToHTML(assistantResponse); // Convert insights to HTML
 
-    console.log('Final response:', finalResponse);
+    console.log('Processed response:', finalResponse.substring(0, 100) + '...');
 
     const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
       const [userMsg] = await tx.insert(chats).values({
@@ -325,7 +321,7 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
       context: {
         similarityScore,
         contextCount: enhancedContext.length,
-        recommendedTasks: recommendedTasks.length
+        recommendedTasks: recommendations.length
       }
     };
   } catch (error: any) {
