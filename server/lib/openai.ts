@@ -6,27 +6,12 @@ import { updateChatContext, createEmbedding } from './embeddings';
 import { findRecommendedTasks } from './embeddings';
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 import { marked } from 'marked';
-import { createReadStream } from 'fs';
-
-interface WhisperResponse {
-  text: string;
-  segments: Array<{
-    start: number;
-    end: number;
-    text: string;
-    speaker?: string;
-    confidence: number;
-  }>;
-}
-
-// Model configurations
-const WHISPER_MODEL = "whisper-1";
-const CHAT_MODEL = "gpt-4";
 
 // Configure marked for clean HTML output compatible with TipTap and our styling
 marked.setOptions({
   gfm: true, // GitHub Flavored Markdown
   breaks: true, // Convert \n to <br>
+  mangle: false, // Don't escape HTML
   sanitize: false, // Don't sanitize HTML (we handle this on the frontend)
   headerPrefix: '', // Don't prefix headers
   headerIds: false, // Don't add IDs to headers
@@ -39,7 +24,7 @@ function convertMarkdownToHTML(markdown: string): string {
 
   try {
     // Convert markdown to HTML
-    const html = marked.parse(markdown);
+    const html = marked(markdown);
 
     // Clean up HTML but preserve essential formatting
     return html
@@ -162,6 +147,9 @@ export async function cleanupEmptyTasks(projectId: number): Promise<void> {
   }
 }
 
+// the newest OpenAI model is "gpt-4o" which was released May 13, 2024
+const CHAT_MODEL = "gpt-4o";
+
 interface ChatOptions {
   userId: number;
   message: string;
@@ -198,14 +186,14 @@ export async function createChatCompletion({
     throw new Error("OpenAI API key not found. Please add your API key in settings.");
   }
 
-  const openai = new OpenAI({
-    apiKey,
-  });
-
   // Use user's custom prompts or fall back to defaults
   const primaryPrompt = userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT;
   const todoPrompt = userSettings?.todoPrompt || DEFAULT_TODO_PROMPT;
   const systemPrompt = userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+
+  const openai = new OpenAI({
+    apiKey,
+  });
 
   const userData = await getContextData(userId);
   const { enhancedContext, similarityScore } = await updateChatContext(userId, message);
@@ -217,10 +205,10 @@ export async function createChatCompletion({
   });
 
   // Select the appropriate prompt based on the promptType
-  const basePrompt = promptType === 'todo'
-    ? todoPrompt
+  const basePrompt = promptType === 'todo' 
+    ? todoPrompt 
     : promptType === 'primary'
-      ? primaryPrompt
+      ? primaryPrompt 
       : systemPrompt;
 
   // Build system message with enhanced contextual awareness and selected prompt
@@ -419,44 +407,4 @@ function formatContextForPrompt(enhancedContext: any[]): string {
     })
     .filter(Boolean)
     .join('\n\n');
-}
-
-// Add the transcribe function with proper file handling
-export async function transcribeAudio(audioFilePath: string, openAiKey: string): Promise<WhisperResponse> {
-  const openai = new OpenAI({ apiKey: openAiKey });
-
-  try {
-    console.log('Starting audio transcription:', {
-      model: WHISPER_MODEL,
-      file: audioFilePath
-    });
-
-    // Create a readable stream from the file
-    const audioFileStream = createReadStream(audioFilePath);
-
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioFileStream,
-      model: WHISPER_MODEL,
-      language: "en",
-      response_format: "verbose_json",
-      timestamp_granularities: ["segment", "word"],
-      // Ask for word-level timestamps for better turn detection
-      word_timestamps: true,
-      // Request speaker detection if possible
-      prompt: "Detect different speakers and label them as Speaker 1, Speaker 2, etc."
-    });
-
-    console.log('Transcription completed:', {
-      success: true,
-      hasSegments: Array.isArray(transcription.segments),
-      segmentCount: transcription.segments?.length
-    });
-
-    return transcription as unknown as WhisperResponse;
-  } catch (error: any) {
-    console.error("Error transcribing audio:", error);
-    throw new Error(
-      error.message || "Failed to transcribe audio"
-    );
-  }
 }
