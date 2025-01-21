@@ -7,15 +7,30 @@ import { findRecommendedTasks } from './embeddings';
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 import { marked } from 'marked';
 
+// =================================================================
+// Common Types & Utilities
+// =================================================================
+
+interface ChatOptions {
+  userId: number;
+  message: string;
+  context?: {
+    transcription?: string | null;
+    summary?: string | null;
+    projectId?: number;
+  };
+  promptType?: 'primary' | 'todo' | 'system';
+}
+
 // Configure marked for clean HTML output compatible with TipTap and our styling
 marked.setOptions({
-  gfm: true, // GitHub Flavored Markdown
-  breaks: true, // Convert \n to <br>
-  mangle: false, // Don't escape HTML
-  sanitize: false, // Don't sanitize HTML (we handle this on the frontend)
-  headerPrefix: '', // Don't prefix headers
-  headerIds: false, // Don't add IDs to headers
-  smartypants: true, // Use smart punctuation
+  gfm: true,
+  breaks: true,
+  mangle: false,
+  sanitize: false,
+  headerPrefix: '',
+  headerIds: false,
+  smartypants: true,
 });
 
 // Helper function to convert markdown to HTML with minimal formatting
@@ -23,26 +38,15 @@ function convertMarkdownToHTML(markdown: string): string {
   if (!markdown) return '';
 
   try {
-    // Convert markdown to HTML
     const html = marked(markdown);
-
-    // Clean up HTML but preserve essential formatting
     return html
-      // Remove any style attributes
       .replace(/\sstyle="[^"]*"/g, '')
-      // Remove any class attributes
       .replace(/\sclass="[^"]*"/g, '')
-      // Clean up empty paragraphs
       .replace(/<p>\s*<\/p>/g, '')
-      // Remove any data attributes
       .replace(/\sdata-[^=]*="[^"]*"/g, '')
-      // Clean up multiple line breaks while preserving intentional spacing
       .replace(/(\r?\n){3,}/g, '\n\n')
-      // Ensure proper spacing around list items
       .replace(/<\/li><li>/g, '</li>\n<li>')
-      // Ensure proper spacing around headers
       .replace(/<\/h([1-6])><h([1-6])>/g, '</h$1>\n<h$2>')
-      // Normalize whitespace
       .trim();
   } catch (error) {
     console.error('Error converting markdown to HTML:', error);
@@ -50,7 +54,10 @@ function convertMarkdownToHTML(markdown: string): string {
   }
 }
 
-// Task filtering functions - used by routes.ts only
+// =================================================================
+// Task Analysis & Filtering
+// =================================================================
+
 export function isEmptyTaskResponse(text: string): boolean {
   if (!text || typeof text !== 'string') {
     console.log('Empty task check: Invalid or empty input');
@@ -64,30 +71,19 @@ export function isEmptyTaskResponse(text: string): boolean {
   }
 
   const excludedPhrases = [
-    "no task",
-    "no tasks",
-    "no deliverable",
-    "no deliverables",
-    "no tasks identified",
-    "no deliverables identified",
-    "no tasks or deliverables",
-    "no tasks or deliverables identified",
-    "no specific tasks",
-    "no specific deliverables",
-    "none identified",
-    "could not identify",
-    "unable to identify",
-    "no action items",
+    "no task", "no tasks", "no deliverable", "no deliverables",
+    "no tasks identified", "no deliverables identified",
+    "no tasks or deliverables", "no tasks or deliverables identified",
+    "no specific tasks", "no specific deliverables", "none identified",
+    "could not identify", "unable to identify", "no action items",
     "no actions",
   ];
 
-  // First check exact matches
   if (excludedPhrases.includes(trimmedText)) {
     console.log('Empty task check: Exact match found:', trimmedText);
     return true;
   }
 
-  // Then check for phrases within the text
   const hasPhrase = excludedPhrases.some(phrase => {
     const includes = trimmedText.includes(phrase);
     if (includes) {
@@ -96,14 +92,12 @@ export function isEmptyTaskResponse(text: string): boolean {
     return includes;
   });
 
-  // Check for common patterns that might indicate an empty task message
   const containsOnlyPunctuation = /^[\s\.,!?:;-]*$/.test(trimmedText);
   if (containsOnlyPunctuation) {
     console.log('Empty task check: Contains only punctuation');
     return true;
   }
 
-  // Additional pattern checks for empty task indicators
   const patternChecks = [
     /^no\s+.*\s+found/i,
     /^could\s+not\s+.*\s+any/i,
@@ -147,193 +141,12 @@ export async function cleanupEmptyTasks(projectId: number): Promise<void> {
   }
 }
 
-// the newest OpenAI model is "gpt-4o" which was released May 13, 2024. do not change this unless explicitly requested by the user
+// =================================================================
+// Chat & Context Management
+// =================================================================
+
+// Using the newest OpenAI model
 const CHAT_MODEL = "gpt-4o";
-
-interface ChatOptions {
-  userId: number;
-  message: string;
-  context?: {
-    transcription?: string | null;
-    summary?: string | null;
-    projectId?: number;
-  };
-  promptType?: 'primary' | 'todo' | 'system';
-}
-
-export async function createChatCompletion({
-  userId,
-  message,
-  context,
-  promptType = 'system'
-}: ChatOptions) {
-  const user = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-  });
-
-  if (!user) {
-    throw new Error("User not found");
-  }
-
-  const userSettings = await db.query.settings.findFirst({
-    where: eq(settings.userId, userId),
-  });
-
-  const apiKey = userSettings?.openAiKey || user.openaiApiKey;
-
-  if (!apiKey) {
-    throw new Error("OpenAI API key not found. Please add your API key in settings.");
-  }
-
-  // Use user's custom prompts or fall back to defaults
-  const primaryPrompt = userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT;
-  const todoPrompt = userSettings?.todoPrompt || DEFAULT_TODO_PROMPT;
-  const systemPrompt = userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT;
-
-  const openai = new OpenAI({
-    apiKey,
-  });
-
-  const userData = await getContextData(userId);
-  const { enhancedContext, similarityScore } = await updateChatContext(userId, message);
-
-  const { recommendations: recommendedTasks } = await findRecommendedTasks(userId, message, {
-    limit: 5,
-    minSimilarity: 0.5,
-    includeCompleted: false
-  });
-
-  // Select the appropriate prompt based on the promptType
-  const basePrompt = promptType === 'todo'
-    ? (userSettings?.todoPrompt || DEFAULT_TODO_PROMPT)
-    : promptType === 'primary'
-      ? (userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT)
-      : (userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT);
-
-  // Build system message with enhanced contextual awareness and selected prompt
-  let systemMessage = `${basePrompt}\n\nDatabase Context:
-Total Projects: ${userData.totalProjects}
-Total Recordings: ${userData.totalRecordings}
-Total Tasks: ${userData.totalTodos} (${userData.totalCompletedTodos} completed)
-
-${userData.latestRecording ? `Latest Recording:
-Title: "${userData.latestRecording.title}"
-Created: ${userData.latestRecording.createdAt.toLocaleString()}
-Has Transcription: ${!!userData.latestRecording.transcription}
-Has Summary: ${!!userData.latestRecording.summary}
-${userData.latestRecording.transcription ? `\nTranscription Preview:\n${userData.latestRecording.transcription.substring(0, 500)}...` : ''}
-${userData.latestRecording.summary ? `\nSummary:\n${userData.latestRecording.summary}` : ''}
-` : 'No recordings available.'}
-
-Available Projects and Recordings:
-${userData.projects.map(p => `
-Project: "${p.title}" (Created: ${p.createdAt.toLocaleString()})
-Type: ${p.isRecording ? 'Recording' : 'Project'}
-${p.description ? `Description: ${p.description}` : ''}
-${p.transcription ? `Has Transcription: Yes\nTranscription Preview:\n${p.transcription.substring(0, 300)}...` : ''}
-${p.summary ? `\nSummary:\n${p.summary}` : ''}
-Tasks (${p.todoCount} total, ${p.completedTodos} completed):
-${p.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'}, Created: ${t.createdAt.toLocaleString()})`).join('\n') || 'No tasks'}
-${p.note ? `\nNotes (Last updated: ${p.note.updatedAt.toLocaleString()}):\n${p.note.content}` : ''}
-`).join('\n')}
-
-Relevant Context:
-${formatContextForPrompt(enhancedContext)}
-
-Recommended Tasks Based on Current Context:
-${recommendedTasks.length > 0
-    ? recommendedTasks.map(task =>
-      `- [${task.completed ? 'Completed' : 'Pending'}] ${task.text}${
-        task.projectTitle ? ` (Project: ${task.projectTitle})` : ''
-      }`
-    ).join('\n')
-    : 'No specifically relevant tasks found for this conversation.'}`;
-
-  // For project-specific chat, add focused context
-  if (context?.projectId) {
-    const projectContext = userData.projects.find(p => p.id === context.projectId);
-    if (projectContext) {
-      systemMessage += `\n\nFocused Project Context:
-Title: "${projectContext.title}"
-${projectContext.description ? `Description: ${projectContext.description}\n` : ''}
-Created: ${projectContext.createdAt.toLocaleString()}
-Tasks: ${projectContext.todoCount} total (${projectContext.completedTodos} completed)
-${projectContext.transcription ? `\nTranscription:\n${projectContext.transcription}` : ''}
-${projectContext.summary ? `\nSummary:\n${projectContext.summary}` : ''}
-${projectContext.note ? `\nNotes:\n${projectContext.note.content}` : ''}
-
-Current Tasks:
-${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'})`).join('\n') || 'No tasks'}`;
-    }
-  }
-
-  try {
-    const response = await openai.chat.completions.create({
-      model: CHAT_MODEL,
-      messages: [
-        { role: "system", content: systemMessage },
-        { role: "user", content: message },
-      ],
-      temperature: 0.7,
-      max_tokens: 500,
-    });
-
-    const assistantResponse = response.choices[0].message.content || "";
-    console.log('GPT response:', assistantResponse);
-
-    // Only convert to HTML if it's not a todo prompt
-    const finalResponse = promptType === 'todo'
-      ? assistantResponse  // Keep tasks as plain text
-      : convertMarkdownToHTML(assistantResponse); // Convert insights to HTML
-
-    console.log('Final response:', finalResponse);
-
-    const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
-      const [userMsg] = await tx.insert(chats).values({
-        userId,
-        role: "user",
-        content: message,
-        projectId: context?.projectId || null,
-        timestamp: new Date(),
-      }).returning();
-
-      const [assistantMsg] = await tx.insert(chats).values({
-        userId,
-        role: "assistant",
-        content: finalResponse,
-        projectId: context?.projectId || null,
-        timestamp: new Date(),
-      }).returning();
-
-      return [userMsg, assistantMsg];
-    });
-
-    await Promise.all([
-      createEmbedding({
-        contentType: 'chat',
-        contentId: userMessage.id,
-        contentText: message,
-      }),
-      createEmbedding({
-        contentType: 'chat',
-        contentId: assistantMessage.id,
-        contentText: finalResponse,
-      })
-    ]);
-
-    return {
-      message: finalResponse,
-      context: {
-        similarityScore,
-        contextCount: enhancedContext.length,
-        recommendedTasks: recommendedTasks.length
-      }
-    };
-  } catch (error: any) {
-    console.error("OpenAI API error:", error);
-    throw new Error(error.message || "Failed to generate response");
-  }
-}
 
 async function getContextData(userId: number) {
   const userProjects = await db.query.projects.findMany({
@@ -345,7 +158,6 @@ async function getContextData(userId: number) {
     orderBy: (projects, { desc }) => [desc(projects.createdAt)],
   });
 
-  // Get the most recent recording first
   const latestRecording = userProjects.find(p => p.recordingUrl && p.recordingUrl !== 'personal.none');
 
   const projectsContext = userProjects.map(project => ({
@@ -406,4 +218,171 @@ function formatContextForPrompt(enhancedContext: any[]): string {
     })
     .filter(Boolean)
     .join('\n\n');
+}
+
+export async function createChatCompletion({
+  userId,
+  message,
+  context,
+  promptType = 'system'
+}: ChatOptions) {
+  const user = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+  });
+
+  if (!user) {
+    throw new Error("User not found");
+  }
+
+  const userSettings = await db.query.settings.findFirst({
+    where: eq(settings.userId, userId),
+  });
+
+  const apiKey = userSettings?.openAiKey || user.openaiApiKey;
+
+  if (!apiKey) {
+    throw new Error("OpenAI API key not found. Please add your API key in settings.");
+  }
+
+  const primaryPrompt = userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT;
+  const todoPrompt = userSettings?.todoPrompt || DEFAULT_TODO_PROMPT;
+  const systemPrompt = userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+
+  const openai = new OpenAI({ apiKey });
+
+  const userData = await getContextData(userId);
+  const { enhancedContext, similarityScore } = await updateChatContext(userId, message);
+
+  const { recommendations: recommendedTasks } = await findRecommendedTasks(userId, message, {
+    limit: 5,
+    minSimilarity: 0.5,
+    includeCompleted: false
+  });
+
+  const basePrompt = promptType === 'todo'
+    ? (userSettings?.todoPrompt || DEFAULT_TODO_PROMPT)
+    : promptType === 'primary'
+      ? (userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT)
+      : (userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT);
+
+  let systemMessage = `${basePrompt}\n\nDatabase Context:
+Total Projects: ${userData.totalProjects}
+Total Recordings: ${userData.totalRecordings}
+Total Tasks: ${userData.totalTodos} (${userData.totalCompletedTodos} completed)
+
+${userData.latestRecording ? `Latest Recording:
+Title: "${userData.latestRecording.title}"
+Created: ${userData.latestRecording.createdAt.toLocaleString()}
+Has Transcription: ${!!userData.latestRecording.transcription}
+Has Summary: ${!!userData.latestRecording.summary}
+${userData.latestRecording.transcription ? `\nTranscription Preview:\n${userData.latestRecording.transcription.substring(0, 500)}...` : ''}
+${userData.latestRecording.summary ? `\nSummary:\n${userData.latestRecording.summary}` : ''}
+` : 'No recordings available.'}
+
+Available Projects and Recordings:
+${userData.projects.map(p => `
+Project: "${p.title}" (Created: ${p.createdAt.toLocaleString()})
+Type: ${p.isRecording ? 'Recording' : 'Project'}
+${p.description ? `Description: ${p.description}` : ''}
+${p.transcription ? `Has Transcription: Yes\nTranscription Preview:\n${p.transcription.substring(0, 300)}...` : ''}
+${p.summary ? `\nSummary:\n${p.summary}` : ''}
+Tasks (${p.todoCount} total, ${p.completedTodos} completed):
+${p.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'}, Created: ${t.createdAt.toLocaleString()})`).join('\n') || 'No tasks'}
+${p.note ? `\nNotes (Last updated: ${p.note.updatedAt.toLocaleString()}):\n${p.note.content}` : ''}
+`).join('\n')}
+
+Relevant Context:
+${formatContextForPrompt(enhancedContext)}
+
+Recommended Tasks Based on Current Context:
+${recommendedTasks.length > 0
+    ? recommendedTasks.map(task =>
+      `- [${task.completed ? 'Completed' : 'Pending'}] ${task.text}${
+        task.projectTitle ? ` (Project: ${task.projectTitle})` : ''
+      }`
+    ).join('\n')
+    : 'No specifically relevant tasks found for this conversation.'}`;
+
+  if (context?.projectId) {
+    const projectContext = userData.projects.find(p => p.id === context.projectId);
+    if (projectContext) {
+      systemMessage += `\n\nFocused Project Context:
+Title: "${projectContext.title}"
+${projectContext.description ? `Description: ${projectContext.description}\n` : ''}
+Created: ${projectContext.createdAt.toLocaleString()}
+Tasks: ${projectContext.todoCount} total (${projectContext.completedTodos} completed)
+${projectContext.transcription ? `\nTranscription:\n${projectContext.transcription}` : ''}
+${projectContext.summary ? `\nSummary:\n${projectContext.summary}` : ''}
+${projectContext.note ? `\nNotes:\n${projectContext.note.content}` : ''}
+
+Current Tasks:
+${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'})`).join('\n') || 'No tasks'}`;
+    }
+  }
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: CHAT_MODEL,
+      messages: [
+        { role: "system", content: systemMessage },
+        { role: "user", content: message },
+      ],
+      temperature: 0.7,
+      max_tokens: 500,
+    });
+
+    const assistantResponse = response.choices[0].message.content || "";
+    console.log('GPT response:', assistantResponse);
+
+    const finalResponse = promptType === 'todo'
+      ? assistantResponse
+      : convertMarkdownToHTML(assistantResponse);
+
+    console.log('Final response:', finalResponse);
+
+    const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
+      const [userMsg] = await tx.insert(chats).values({
+        userId,
+        role: "user",
+        content: message,
+        projectId: context?.projectId || null,
+        timestamp: new Date(),
+      }).returning();
+
+      const [assistantMsg] = await tx.insert(chats).values({
+        userId,
+        role: "assistant",
+        content: finalResponse,
+        projectId: context?.projectId || null,
+        timestamp: new Date(),
+      }).returning();
+
+      return [userMsg, assistantMsg];
+    });
+
+    await Promise.all([
+      createEmbedding({
+        contentType: 'chat',
+        contentId: userMessage.id,
+        contentText: message,
+      }),
+      createEmbedding({
+        contentType: 'chat',
+        contentId: assistantMessage.id,
+        contentText: finalResponse,
+      })
+    ]);
+
+    return {
+      message: finalResponse,
+      context: {
+        similarityScore,
+        contextCount: enhancedContext.length,
+        recommendedTasks: recommendedTasks.length
+      }
+    };
+  } catch (error: any) {
+    console.error("OpenAI API error:", error);
+    throw new Error(error.message || "Failed to generate response");
+  }
 }
