@@ -65,26 +65,6 @@ export function createOpenAIClient(config: AIServiceConfig): OpenAI {
   });
 }
 
-export function convertMarkdownToHTML(markdown: string): string {
-  if (!markdown) return '';
-
-  try {
-    const html = marked(markdown);
-    return html
-      .replace(/\sstyle="[^"]*"/g, '')
-      .replace(/\sclass="[^"]*"/g, '')
-      .replace(/<p>\s*<\/p>/g, '')
-      .replace(/\sdata-[^=]*="[^"]*"/g, '')
-      .replace(/(\r?\n){3,}/g, '\n\n')
-      .replace(/<\/li><li>/g, '</li>\n<li>')
-      .replace(/<\/h([1-6])><h([1-6])>/g, '</h$1>\n<h$2>')
-      .trim();
-  } catch (error) {
-    console.error('Error converting markdown to HTML:', error);
-    return `<p>${markdown}</p>`;
-  }
-}
-
 export function formatContextForPrompt(enhancedContext: any[]): string {
   if (!Array.isArray(enhancedContext) || enhancedContext.length === 0) {
     return 'No relevant context found.';
