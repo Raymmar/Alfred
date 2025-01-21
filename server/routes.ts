@@ -8,7 +8,7 @@ import {
   todos,
   notes,
   chats,
-  kanbanColumns
+  kanban_columns
 } from "@db/schema";
 import { desc, eq, and, asc, or } from "drizzle-orm";
 import formidable from "formidable";
@@ -1347,7 +1347,7 @@ Format Rules:
     });
     app.get("/api/kanban/columns", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
-        const columns = await db.query.kanbanColumns.findMany({
+        const columns = await db.query.kanban_columns.findMany({
           orderBy: (columns, { asc }) => [asc(columns.order)],
           with: {
             todos: {
@@ -1370,13 +1370,13 @@ Format Rules:
         if (typeof title !== "string" || !title.trim()) {
           return res.status(400).json({ message: "Invalid title" });
         }
-        const columns = await db.query.kanbanColumns.findMany({
+        const columns = await db.query.kanban_columns.findMany({
           orderBy: (columns, { desc }) => [desc(columns.order)],
           limit: 1,
         });
         const order = columns.length > 0 ? columns[0].order + 1 : 0;
         const [column] = await db
-          .insert(kanbanColumns)
+          .insert(kanban_columns)
           .values({
             title: title.trim(),
             order,
