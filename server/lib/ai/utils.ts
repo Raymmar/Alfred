@@ -9,7 +9,6 @@ import OpenAI from "openai";
 marked.setOptions({
   gfm: true,
   breaks: true,
-  smartypants: true,
 });
 
 export function convertMarkdownToHTML(markdown: string): string {
@@ -34,30 +33,53 @@ export function convertMarkdownToHTML(markdown: string): string {
 
 export async function getAIServiceConfig(userId: number): Promise<AIServiceConfig> {
   try {
+    console.log('Getting AI service config for user:', userId);
+
     const user = await db.query.users.findFirst({
       where: eq(users.id, userId),
     });
 
     if (!user) {
+      console.error('User not found:', userId);
       throw new Error("User not found");
     }
+
+    console.log('Found user:', { 
+      id: user.id, 
+      hasOpenAiKey: !!user.openaiApiKey 
+    });
 
     const userSettings = await db.query.settings.findFirst({
       where: eq(settings.userId, userId),
     });
 
+    console.log('User settings:', { 
+      hasSettings: !!userSettings,
+      hasSettingsApiKey: !!userSettings?.openAiKey 
+    });
+
     const apiKey = userSettings?.openAiKey || user.openaiApiKey;
 
     if (!apiKey) {
+      console.error('OpenAI API key not found for user:', userId);
       throw new Error("OpenAI API key not found. Please add your API key in settings.");
     }
 
-    return {
+    const config = {
       apiKey,
       model: "gpt-4o", // Latest model as of May 13, 2024
       temperature: 0.7,
       maxTokens: 1000,
     };
+
+    console.log('Created AI service config:', { 
+      hasApiKey: !!config.apiKey,
+      model: config.model,
+      maxTokens: config.maxTokens
+    });
+
+    return config;
+
   } catch (error) {
     console.error('Error getting AI service config:', error);
     throw error;
@@ -66,8 +88,14 @@ export async function getAIServiceConfig(userId: number): Promise<AIServiceConfi
 
 export function createOpenAIClient(config: AIServiceConfig): OpenAI {
   if (!config.apiKey) {
+    console.error('OpenAI API key is missing in config');
     throw new Error("OpenAI API key is required");
   }
+
+  console.log('Creating OpenAI client with config:', {
+    hasApiKey: !!config.apiKey,
+    model: config.model
+  });
 
   return new OpenAI({
     apiKey: config.apiKey,
