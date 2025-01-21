@@ -38,12 +38,20 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
 
   const { data: messages = [] } = useQuery<Message[]>({
     queryKey: messagesQueryKey,
-    enabled: true,
+    queryFn: async () => {
+      const response = await fetch(projectId ? `/api/projects/${projectId}/messages` : '/api/messages', {
+        credentials: 'include'
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch messages');
+      }
+      return response.json();
+    },
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,
     refetchOnWindowFocus: false,
-    refetchOnMount: false,
+    refetchOnMount: true,
     refetchOnReconnect: false,
   });
 
