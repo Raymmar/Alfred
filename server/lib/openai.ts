@@ -259,11 +259,12 @@ export async function createChatCompletion({
     includeCompleted: false
   });
 
+  // Use the appropriate prompt based on the promptType
   const basePrompt = promptType === 'todo'
-    ? (userSettings?.todoPrompt || DEFAULT_TODO_PROMPT)
+    ? todoPrompt
     : promptType === 'primary'
-      ? (userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT)
-      : (userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT);
+      ? primaryPrompt
+      : systemPrompt;
 
   let systemMessage = `${basePrompt}\n\nDatabase Context:
 Total Projects: ${userData.totalProjects}
