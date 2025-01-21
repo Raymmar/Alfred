@@ -402,93 +402,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
     setupAuth(app);
     app.get("/api/messages", requireAuth, async (req: AuthRequest, res: Response) => {
         try {
-          // Ensure we only fetch messages for the currently authenticated user
-          if (!req.user?.id) {
-            return res.status(401).json({ message: "Not authenticated" });
-          }
-
-          // Only fetch messages that belong to the current user and are not associated with any project
           const messages = await db.query.chats.findMany({
             where: and(
-              eq(chats.userId, req.user.id),
+              eq(chats.userId, req.user!.id),
               eq(chats.projectId, null)
             ),
             orderBy: asc(chats.timestamp),
           });
-
-          // Log the query for debugging
-          console.log('Fetched messages for user:', {
-            userId: req.user.id,
-            messageCount: messages.length,
-            timestamp: new Date().toISOString()
-          });
-
           res.json(messages);
         } catch (error: any) {
           console.error("Error fetching chat messages:", error);
           res.status(500).json({ message: "Failed to fetch messages" });
         }
       });
-
     app.post("/api/chat", requireAuth, async (req: AuthRequest, res: Response) => {
-      try {
-        if (!req.user?.id) {
-          return res.status(401).json({ message: "Not authenticated" });
-        }
+        try {
+          const { message } = req.body;
 
-        const { message } = req.body;
-
-        if (typeof message !== "string" || !message.trim()) {
-          return res.status(400).json({ message: "Invalid message" });
-        }
-
-        // Create both messages in a transaction to ensure consistency
-        const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
-          // Insert user message
-          const [userMsg] = await tx.insert(chats).values({
-            userId: req.user!.id,
-            role: "user",
-            content: message.trim(),
-            projectId: null,
-            timestamp: new Date(),
-          }).returning();
-
-          // Get AI response using system prompt
-          const aiResponse = await createChatCompletion({
-            userId: req.user!.id,
-            message: message.trim(),
-            promptType: 'system', // Use system prompt for general chat
-          });
-
-          if (!aiResponse.ok) {
-            throw new Error(aiResponse.message);
+          if (typeof message !== "string" || !message.trim()) {
+            return res.status(400).json({ message: "Invalid message" });
           }
 
-          // Insert assistant message
-          const [assistantMsg] = await tx.insert(chats).values({
-            userId: req.user!.id,
-            role: "assistant",
-            content: aiResponse.data,
-            projectId: null,
-            timestamp: new Date(),
-          }).returning();
+          const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
+            const [userMsg] = await tx.insert(chats).values({
+              userId: req.user!.id,
+              role: "user",
+              content: message.trim(),
+              projectId: null,
+              timestamp: new Date(),
+            }).returning();
 
-          return [userMsg, assistantMsg];
-        });
+            const aiResponse = await createChatCompletion({
+              userId: req.user!.id,
+              message: message.trim(),
+            });
 
-        res.json({
-          message: assistantMessage.content,
-          messages: [userMessage, assistantMessage]
-        });
+            const [assistantMsg] = await tx.insert(chats).values({
+              userId: req.user!.id,
+              role: "assistant",
+              content: aiResponse.message,
+              projectId: null,
+              timestamp: new Date(),
+            }).returning();
 
-      } catch (error: any) {
-        console.error("Chat error:", error);
-        res.status(500).json({
-          message: error.message || "Failed to generate response",
-        });
-      }
-    });
+            return [userMsg, assistantMsg];
+          });
 
+          res.json({
+            message: assistantMessage.content,
+            messages: [userMessage, assistantMessage]
+          });
+
+        } catch (error: any) {
+          console.error("Chat error:", error);
+          res.status(500).json({
+            message: error.message || "Failed to generate response",
+          });
+        }
+      });
     app.get("/api/projects/:projectId/messages", requireAuth, async (req: AuthRequest, res: Response) => {
         try {
           const projectId = parseInt(req.params.projectId);
@@ -524,72 +495,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
     app.post("/api/projects/:projectId/chat", requireAuth, async (req: AuthRequest, res: Response) => {
-      try {
-        const projectId = parseInt(req.params.projectId);
-        if (isNaN(projectId)) {
-          return res.status(400).json({ message: "Invalid project ID" });
+        try {
+          const projectId = parseInt(req.params.projectId);
+          if (isNaN(projectId)) {
+            return res.status(400).json({ message: "Invalid project ID" });
+          }
+
+          const { message } = req.body;
+          if (typeof message !== "string" || !message.trim()) {
+            return res.status(400).json({ message: "Invalid message" });
+          }
+
+          const [project] = await db.query.projects.findMany({
+            where: eq(projects.id, projectId),
+            limit: 1,
+          });
+
+          if (!project) {
+            return res.status(404).json({ message: "Project not found" });
+          }
+
+          if (project.userId !== req.user!.id) {
+            return res.status(403).json({ message: "Not authorized" });
+          }
+
+          const [userMessage] = await db.insert(chats).values({
+            userId: req.user!.id,
+            projectId,
+            role: "user",
+            content: message.trim(),
+            timestamp: new Date(),
+          }).returning();
+
+          const aiResponse = await createChatCompletion({
+            userId: req.user!.id,
+            message: message.trim(),
+            context: {
+              transcription: project.transcription,
+              summary: project.summary,
+              notes: project.notes,
+            },
+          });
+
+          const [assistantMessage] = await db.insert(chats).values({
+            userId: req.user!.id,
+            projectId,
+            role: "assistant",
+            content: aiResponse.message,
+            timestamp: new Date(),
+          }).returning();
+
+          res.json({
+            message: aiResponse.message,
+            messages: [userMessage, assistantMessage]
+          });
+        } catch (error: any) {
+          console.error("Project chat error:", error);
+          res.status(500).json({
+            message: error.message || "Failed to generate response",
+          });
         }
-
-        const { message } = req.body;
-        if (typeof message !== "string" || !message.trim()) {
-          return res.status(400).json({ message: "Invalid message" });
-        }
-
-        const [project] = await db.query.projects.findMany({
-          where: eq(projects.id, projectId),
-          limit: 1,
-        });
-
-        if (!project) {
-          return res.status(404).json({ message: "Project not found" });
-        }
-
-        if (project.userId !== req.user!.id) {
-          return res.status(403).json({ message: "Not authorized" });
-        }
-
-        const [userMessage] = await db.insert(chats).values({
-          userId: req.user!.id,
-          projectId,
-          role: "user",
-          content: message.trim(),
-          timestamp: new Date(),
-        }).returning();
-
-        // Get AI response using system prompt
-        const aiResponse = await createChatCompletion({
-          userId: req.user!.id,
-          message: message.trim(),
-          promptType: 'system', // Use system prompt for project-specific chat
-          context: {
-            transcription: project.transcription,
-            summary: project.summary,
-          },
-        });
-
-        if (!aiResponse.ok) {
-          throw new Error(aiResponse.message);
-        }
-
-        const [assistantMessage] = await db.insert(chats).values({
-          userId: req.user!.id,
-          projectId,
-          role: "assistant",
-          content: aiResponse.data,
-          timestamp: new Date(),
-        }).returning();
-
-        res.json({
-          message: aiResponse.data,
-          messages: [userMessage, assistantMessage]
-        });
-      } catch (error: any) {
-        console.error("Project chat error:", error);
-        res.status(500).json({
-          message: error.message || "Failed to generate response",
-        });
-      }
-    });
+      });
 
     app.get(
       "/api/recordings/:filename/download",
@@ -952,7 +918,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ) {
             return res.status(400).json({
               message:
-                "Invalid input: API key, default promptand todo prompt must be strings",
+                "Invalid input: API key, default prompt, and todo prompt must be strings",
             });
           }
           const [updatedUser] = await db
@@ -960,7 +926,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .set({
               openaiApiKey: openaiApiKey || "",
               defaultPrompt: defaultPrompt || "",
-              todoPrompt: todoPrompt ||"",
+              todoPrompt: todoPrompt || "",
             })
             .where(eq(users.id, req.user!.id))
             .returning();
@@ -978,7 +944,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
       });
-
     app.post("/api/projects", requireAuth, async (req: AuthRequest, res: Response) => {
         try {          const { title, description, recordingUrl, initialNoteContent } = req.body;
           const [project] = await db.transaction(async (tx) => {
@@ -1107,6 +1072,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     app.post("/api/projects/:id/process", requireAuth, async (req: AuthRequest, res: Response) => {
       let mp3FilePath: string | undefined;
+
       try {
         const projectId = parseInt(req.params.id);
         if (isNaN(projectId)) {
@@ -1119,6 +1085,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             eq(projects.userId, req.user!.id)
           ),
           limit: 1,
+          with: {
+            note: true,
+          },
         });
 
         if (!project) {
@@ -1149,13 +1118,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             message: "Recording file not found or not accessible",
           });
         }
-
-        console.log("Starting audio processing for project:", {
-          projectId,
-          userId: req.user!.id,
-          recordingPath,
-          timestamp: new Date().toISOString()
-        });
 
         // Convert to MP3 for Whisper
         mp3FilePath = path.join(RECORDINGS_DIR, `temp_${Date.now()}.mp3`);
@@ -1205,7 +1167,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Format transcript with timestamps
         const formattingResponse = await openai.chat.completions.create({
-          model: "gpt-4",
+          model: "gpt-4o",
           messages: [
             {
               role: "system",
@@ -1214,7 +1176,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
    - Identify key topic changes and sections
    - Format as: "# Topic Title"
    - Place at natural topic transitions
-2. Regular Timestamps:
+1. Regular Timestamps:
    - Add timestamps [HH:MM:SS.mmm] every 10-30 seconds
    - Place at natural speech breaks
    - Keep timestamps sequential
@@ -1243,11 +1205,9 @@ Format Rules:
 
         const formattedTranscript = formattingResponse.choices[0].message.content.trim();
 
-        console.log("Successfully formatted transcript");
-
-        // Generate title using GPT-4
+        // Generate title
         const titleResponse = await openai.chat.completions.create({
-          model: "gpt-4",
+          model: "gpt-4o",
           messages: [
             {
               role: "system",
@@ -1268,49 +1228,35 @@ Format Rules:
 
         const title = titleResponse.choices[0].message.content.trim();
 
-        console.log("Generated title:", title);
-
-        // Generate insights using user's primary prompt
-        const summaryResult = await createChatCompletion({
+        // Use createChatCompletion for insights with consolidated prompts
+        const summaryResponse = await createChatCompletion({
           userId: req.user!.id,
           message: formattedTranscript,
-          promptType: 'primary',
           context: {
             projectId,
             transcription: formattedTranscript,
-          }
+          },
+          promptType: 'primary'
         });
 
-        if (!summaryResult.message) {
-          throw new Error("Failed to generate summary");
-        }
+        const summary = summaryResponse.message.trim();
 
-        const summary = summaryResult.message;
-
-        console.log("Generated summary using primary prompt");
-
-        // Extract tasks using user's todo prompt
-        const taskResult = await createChatCompletion({
+        // Use createChatCompletion for tasks with consolidated prompts
+        const taskResponse = await createChatCompletion({
           userId: req.user!.id,
           message: formattedTranscript,
-          promptType: 'todo',
           context: {
             projectId,
             transcription: formattedTranscript,
             summary
-          }
+          },
+          promptType: 'todo'
         });
 
-        if (!taskResult.message) {
-          throw new Error("Failed to extract tasks");
-        }
+        const taskContent = taskResponse.message.trim();
 
-        const taskContent = taskResult.message;
-
-        console.log("Generated tasks using todo prompt");
-
-        // Process extracted tasks if valid
-        if (taskContent && !isEmptyTaskResponse(taskContent)) {
+        // Only process tasks if we have valid content
+        if (!isEmptyTaskResponse(taskContent)) {
           const tasks = taskContent
             .split('\n')
             .map(line => line.trim())
@@ -1343,13 +1289,6 @@ Format Rules:
 
         // Clean up any empty tasks
         await cleanupEmptyTasks(projectId);
-
-        console.log("Successfully processed recording for project:", {
-          projectId,
-          userId: req.user!.id,
-          taskCount: taskContent ? taskContent.split('\n').length : 0,
-          timestamp: new Date().toISOString()
-        });
 
         res.json(updatedProject);
 
@@ -1482,6 +1421,177 @@ Format Rules:
         });
       }
     });
+    app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const todoId = parseInt(req.params.id);
+        const { text, completed, columnId, order } = req.body;
+        const [todo] = await db.query.todos.findMany({
+          where: eq(todos.id, todoId),
+          limit: 1,
+          with: {
+            project: true,
+          },
+        });
+        if (!todo) {
+          return res.status(404).json({ message: "Todo not found" });
+        }
+        if (todo.project?.userId !== req.user!.id) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+        const updateData: Partial<typeof todos.$inferInsert> = {
+          updatedAt: new Date(),
+        };
+        if (typeof text === "string" && text.trim()) {
+          updateData.text = text.trim();
+        }
+        if (typeof completed === "boolean") {
+          updateData.completed = completed;
+        }
+        if (typeof columnId === "number") {
+          updateData.columnId = columnId;
+        }
+        if (typeof order === "number") {
+          updateData.order = order;
+        }
+        const [updatedTodo] = await db
+          .update(todos)
+          .set(updateData)
+          .where(eq(todos.id, todoId))
+          .returning();
+        if (!updatedTodo) {
+          throw new Error("Update operation failed");
+        }
+        res.json(updatedTodo);
+      } catch (error: any) {
+        console.error("Error updating todo:", error);
+        res.status(500).json({
+          message: "Failed to update todo",
+          error: error.message,
+        });
+      }
+    });
+    app.put("/api/projects/:id/summary", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const projectId = parseInt(req.params.id);
+        const { summary } = req.body;
+  
+        if (typeof summary !== "string") {
+          return res.status(400).json({ message: "Invalid summary content" });
+        }
+  
+        const [project] = await db.query.projects.findMany({
+          where: eq(projects.id, projectId),
+          limit: 1,
+        });
+  
+        if (!project) {
+          return res.status(404).json({ message: "Project not found" });
+        }
+  
+        if (project.userId !== req.user!.id) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+  
+        const [updatedProject] = await db
+          .update(projects)
+          .set({
+            summary,
+            updatedAt: new Date(),
+          })
+          .where(eq(projects.id, projectId))
+          .returning();
+  
+        res.json(updatedProject);
+      } catch (error: any) {
+        console.error("Error updating project summary:", error);
+        res.status(500).json({
+          message: "Failed to update project summary",
+          error: error.message,
+        });
+      }
+    });
+    app.get("/api/chats/:projectId?", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const projectId = req.params.projectId
+          ? parseInt(req.params.projectId)
+          : undefined;
+        const conditions = [eq(chats.userId, req.user!.id)];
+  
+        if (projectId) {
+          conditions.push(eq(chats.projectId, projectId));
+        }
+  
+        const messages = await db.query.chats.findMany({
+          where: and(...conditions),
+          orderBy: asc(chats.timestamp),
+        });
+        res.json(messages);
+      } catch (error: any) {
+        console.error("Error fetching chats:", error);
+        res.status(500).json({
+          message: "Failed to fetch chats",
+          error: error.message,
+        });
+      }
+    });
+    app.post("/api/todos", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const { text, projectId } = req.body;
+        if (typeof text !== "string" || !text.trim()) {
+          return res.status(400).json({ message: "Invalid task text" });
+        }
+  
+        // If no projectId is provided, find or create personal project
+        let effectiveProjectId = projectId;
+        if (!projectId) {
+          // Find personal project
+          const [personalProject] = await db.query.projects.findMany({
+            where: and(
+              eq(projects.userId, req.user!.id),
+              eq(projects.recordingUrl, 'personal.none')
+            ),
+            limit: 1,
+          });
+  
+          if (personalProject) {
+            effectiveProjectId = personalProject.id;
+          } else {
+            // Create personal project if it doesn't exist
+            const [newPersonalProject] = await db.insert(projects)
+              .values({
+                userId: req.user!.id,
+                title: 'Personal Tasks',
+                description: 'Your personal tasks',
+                recordingUrl: 'personal.none',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .returning();
+            effectiveProjectId = newPersonalProject.id;
+          }
+        }
+  
+        const [todo] = await db.insert(todos)
+          .values({
+            text: text.trim(),
+            projectId: effectiveProjectId,
+            completed: false,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            order: 0,
+          })
+          .returning();
+  
+        res.json(todo);
+      } catch (error: any) {
+        console.error("Error creating todo:", error);
+        res.status(500).json({
+          message: "Failed to create todo",
+          error: error.message,
+        });
+      }
+    });
+  
     app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const todoId = parseInt(req.params.id);

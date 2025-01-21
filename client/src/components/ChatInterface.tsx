@@ -7,7 +7,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useProjects } from "@/hooks/use-projects";
 import { cn } from "@/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useUser } from "@/hooks/use-user";
 
 interface Message {
   role: "user" | "assistant";
@@ -29,27 +28,23 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
   const { toast } = useToast();
   const { projects } = useProjects();
   const queryClient = useQueryClient();
-  const { user } = useUser();
 
   const selectedProject = projectId 
     ? projects.find(p => p.id === projectId)
     : null;
 
-  // Include userId in the query key to ensure proper cache isolation
-  const messagesQueryKey = user?.id 
-    ? ['messages', user.id, projectId] 
-    : ['messages', projectId];
+  const messagesQueryKey = projectId ? ['messages', projectId] : ['messages'];
   const chatEndpoint = projectId ? `/api/projects/${projectId}/chat` : '/api/chat';
 
   const { data: messages = [] } = useQuery<Message[]>({
     queryKey: messagesQueryKey,
-    enabled: !!user?.id, // Only enable query when user is authenticated
-    staleTime: 5 * 60 * 1000, // Consider data fresh for 5 minutes
-    gcTime: 10 * 60 * 1000, // Keep unused data in cache for 10 minutes
+    enabled: true,
+    staleTime: Infinity,
+    gcTime: Infinity,
     retry: false,
-    refetchOnWindowFocus: true,
-    refetchOnMount: true,
-    refetchOnReconnect: true,
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   });
 
   const scrollToBottom = () => {
@@ -64,13 +59,6 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
     }
   };
 
-  // Clear messages when user changes
-  useEffect(() => {
-    if (!user?.id) {
-      queryClient.setQueryData(messagesQueryKey, []);
-    }
-  }, [user?.id, queryClient, messagesQueryKey]);
-
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
@@ -83,7 +71,7 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || !user?.id) return;
+    if (!input.trim() || isLoading) return;
 
     const currentInput = input.trim();
     setInput("");
@@ -196,12 +184,12 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
           onChange={(e) => setInput(e.target.value)}
           placeholder="Type your message..."
           className="flex-1"
-          disabled={isLoading || !user?.id}
+          disabled={isLoading}
         />
         <Button 
           type="submit" 
           size="icon"
-          disabled={!input.trim() || isLoading || !user?.id}
+          disabled={!input.trim() || isLoading}
         >
           <Send className="h-4 w-4" />
         </Button>
