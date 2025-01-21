@@ -12,8 +12,8 @@ export const users = pgTable("users", {
   defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
   todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
   systemPrompt: text("system_prompt").default(DEFAULT_SYSTEM_PROMPT),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  created_at: timestamp("created_at").notNull().defaultNow(),
+  updated_at: timestamp("updated_at").notNull().defaultNow(),
 });
 
 export const settings = pgTable("settings", {
@@ -23,8 +23,8 @@ export const settings = pgTable("settings", {
   defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
   todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
   systemPrompt: text("system_prompt").default(DEFAULT_SYSTEM_PROMPT),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  created_at: timestamp("created_at").notNull().defaultNow(),
+  updated_at: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // Projects table with recordings and processing results
@@ -36,8 +36,8 @@ export const projects = pgTable("projects", {
   recordingUrl: text("recording_url"),
   transcription: text("transcription"),
   summary: text("summary"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  created_at: timestamp("created_at").notNull().defaultNow(),
+  updated_at: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // Notes table
@@ -45,8 +45,8 @@ export const notes = pgTable("notes", {
   id: serial("id").primaryKey(),
   projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
   content: text("content").default(""),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  created_at: timestamp("created_at").notNull().defaultNow(),
+  updated_at: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // Kanban columns
@@ -55,8 +55,8 @@ export const kanbanColumns = pgTable("kanban_columns", {
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
   title: text("title").notNull(),
   order: integer("order").notNull(),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  created_at: timestamp("created_at").notNull().defaultNow(),
+  updated_at: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // Todos
@@ -68,8 +68,8 @@ export const todos = pgTable("todos", {
   text: text("text").notNull(),
   completed: boolean("completed").default(false),
   order: integer("order").notNull().default(0),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  created_at: timestamp("created_at").notNull().defaultNow(),
+  updated_at: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // Chats
@@ -79,7 +79,8 @@ export const chats = pgTable("chats", {
   projectId: integer("project_id").references(() => projects.id, { onDelete: 'cascade' }),
   role: text("role").notNull(),
   content: text("content").notNull(),
-  timestamp: timestamp("timestamp").notNull().defaultNow(),
+  created_at: timestamp("created_at").notNull().defaultNow(),
+  updated_at: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // Define relations
