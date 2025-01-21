@@ -402,6 +402,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     setupAuth(app);
     app.get("/api/messages", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
+        console.log('Fetching messages for user:', {
+          userId: req.user!.id,
+          timestamp: new Date().toISOString()
+        });
+
         const messages = await db.query.chats.findMany({
           where: and(
             eq(chats.userId, req.user!.id),
@@ -409,7 +414,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ),
           orderBy: asc(chats.timestamp),
         });
-        res.json(messages);
+
+        console.log('Found messages:', {
+          userId: req.user!.id,
+          messageCount: messages.length,
+          timestamp: new Date().toISOString()
+        });
+
+        // Explicitly filter messages by user ID one more time for safety
+        const userMessages = messages.filter(msg => msg.userId === req.user!.id);
+
+        res.json(userMessages);
       } catch (error: any) {
         console.error("Error fetching chat messages:", error);
         res.status(500).json({ message: "Failed to fetch messages" });
