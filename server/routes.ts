@@ -1383,6 +1383,7 @@ Format Rules:
             context: {
               projectId,
               transcription: formattedTranscript,
+              note: project.note?.content || '',
             },
             promptType: "primary",
           });

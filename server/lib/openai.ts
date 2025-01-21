@@ -157,6 +157,7 @@ interface ChatOptions {
     transcription?: string | null;
     summary?: string | null;
     projectId?: number;
+    note?: string | null;
   };
   promptType?: 'primary' | 'todo' | 'system';
 }
@@ -272,7 +273,7 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
       model: CHAT_MODEL,
       messages: [
         { role: "system", content: systemMessage },
-        { role: "user", content: message },
+        { role: "user", content: `User's Note:\n${context?.note || 'No existing note'}\n\nTranscript:\n${message}` },
       ],
       temperature: 0.2,
       max_tokens: 8000,
