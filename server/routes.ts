@@ -402,9 +402,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     setupAuth(app);
     app.get("/api/messages", requireAuth, async (req: AuthRequest, res: Response) => {
         try {
+          // Ensure we only fetch messages for the currently authenticated user
+          if (!req.user?.id) {
+            return res.status(401).json({ message: "Not authenticated" });
+          }
+
           const messages = await db.query.chats.findMany({
             where: and(
-              eq(chats.userId, req.user!.id),
+              eq(chats.userId, req.user.id),
               eq(chats.projectId, null)
             ),
             orderBy: asc(chats.timestamp),
@@ -415,8 +420,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           res.status(500).json({ message: "Failed to fetch messages" });
         }
       });
+
     app.post("/api/chat", requireAuth, async (req: AuthRequest, res: Response) => {
         try {
+          if (!req.user?.id) {
+            return res.status(401).json({ message: "Not authenticated" });
+          }
+
           const { message } = req.body;
 
           if (typeof message !== "string" || !message.trim()) {
@@ -1474,24 +1484,24 @@ Format Rules:
       try {
         const projectId = parseInt(req.params.id);
         const { summary } = req.body;
-  
+
         if (typeof summary !== "string") {
           return res.status(400).json({ message: "Invalid summary content" });
         }
-  
+
         const [project] = await db.query.projects.findMany({
           where: eq(projects.id, projectId),
           limit: 1,
         });
-  
+
         if (!project) {
           return res.status(404).json({ message: "Project not found" });
         }
-  
+
         if (project.userId !== req.user!.id) {
           return res.status(403).json({ message: "Not authorized" });
         }
-  
+
         const [updatedProject] = await db
           .update(projects)
           .set({
@@ -1500,7 +1510,7 @@ Format Rules:
           })
           .where(eq(projects.id, projectId))
           .returning();
-  
+
         res.json(updatedProject);
       } catch (error: any) {
         console.error("Error updating project summary:", error);
@@ -1516,11 +1526,11 @@ Format Rules:
           ? parseInt(req.params.projectId)
           : undefined;
         const conditions = [eq(chats.userId, req.user!.id)];
-  
+
         if (projectId) {
           conditions.push(eq(chats.projectId, projectId));
         }
-  
+
         const messages = await db.query.chats.findMany({
           where: and(...conditions),
           orderBy: asc(chats.timestamp),
@@ -1540,7 +1550,7 @@ Format Rules:
         if (typeof text !== "string" || !text.trim()) {
           return res.status(400).json({ message: "Invalid task text" });
         }
-  
+
         // If no projectId is provided, find or create personal project
         let effectiveProjectId = projectId;
         if (!projectId) {
@@ -1552,7 +1562,7 @@ Format Rules:
             ),
             limit: 1,
           });
-  
+
           if (personalProject) {
             effectiveProjectId = personalProject.id;
           } else {
@@ -1570,7 +1580,7 @@ Format Rules:
             effectiveProjectId = newPersonalProject.id;
           }
         }
-  
+
         const [todo] = await db.insert(todos)
           .values({
             text: text.trim(),
@@ -1581,7 +1591,7 @@ Format Rules:
             order: 0,
           })
           .returning();
-  
+
         res.json(todo);
       } catch (error: any) {
         console.error("Error creating todo:", error);
@@ -1591,7 +1601,7 @@ Format Rules:
         });
       }
     });
-  
+
     app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const todoId = parseInt(req.params.id);
