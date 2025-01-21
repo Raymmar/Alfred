@@ -1226,11 +1226,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
 
           if (!project.recordingUrl) {
-            return res
-              .status(400)
-              .json({
-                message: "No recording file associated with this project",
-              });
+            return res.status(400).json({
+              message: "No recording file associated with this project",
+            });
           }
 
           const [user] = await db.query.users.findMany({
@@ -1323,12 +1321,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 2. Regular Timestamps:
    - Add timestamps [HH:MM:SS.mmm] every 10-15 seconds
    - Place at natural speech breaks
-   - Mark indicators when the speaker changes (e.g., "Speaker 1: " or "Speaker 2: ")
    - Keep timestamps sequential
+3. Speaker labels / Turn detection:
+   - Add speaker labels above each timestamped section (i.e. "Speaker 1, speaker 2, etc.")
+   - If there is only one speaker, do not add speaker labels
+   - put the timestamp ans speaker label on a new line above the transcript section they represent
 
 Format Rules:
 - Be sure to send back all of the text
-- Detect speakers and when the speaker changes
+- Detect speakers and indicate when the speaker changes
 - Always start at the beginning of the recording at 00:00:00
 - Each timestamp must be in [HH:MM:SS.mmm] format
 - Begin with a chapter header
@@ -1383,7 +1384,7 @@ Format Rules:
             context: {
               projectId,
               transcription: formattedTranscript,
-              note: project.note?.content || '',
+              note: project.note?.content || "",
             },
             promptType: "primary",
           });
