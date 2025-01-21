@@ -15,7 +15,7 @@ echo "*
 echo "*
 !.gitignore" > .local-data/user-recordings/.gitignore
 
-# Remove any existing recordings from Git-tracked directories
+# Remove any existing recordings (audio and video) from Git-tracked directories
 find . -type f \( -name "*.webm" -o -name "*.mp3" -o -name "*.wav" -o -name "*.ogg" -o -name "*.mp4" -o -name "*.mov" \) -not -path "*.data/*" -not -path "*.local-data/*" -delete
 
 echo "Recordings cleanup complete"
