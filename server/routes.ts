@@ -17,7 +17,7 @@ import express from "express";
 import path, { join } from "path";
 import fs, { existsSync } from "fs";
 import { ensureStorageDirectory, getRecordingsPath, cleanupOrphanedRecordings, getAudioContentType, isValidAudioFile } from "./storage";
-import { createAIServices } from "./lib/ai";
+import { createAIServices, createChatService } from "./lib/ai";
 import { RequestHandler } from "express-serve-static-core";
 import OpenAI from "openai";
 
