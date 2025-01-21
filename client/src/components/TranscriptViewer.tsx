@@ -6,8 +6,10 @@ interface TranscriptSegment {
   text: string;
   start: number;
   end: number;
+  speaker?: string;
   isChapter?: boolean;
   isNewParagraph?: boolean;
+  confidence?: number;
 }
 
 interface TranscriptViewerProps {
@@ -17,11 +19,11 @@ interface TranscriptViewerProps {
   className?: string;
 }
 
-export function TranscriptViewer({ 
-  transcript, 
-  onSegmentClick, 
+export function TranscriptViewer({
+  transcript,
+  onSegmentClick,
   currentTime,
-  className 
+  className
 }: TranscriptViewerProps) {
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
 
@@ -32,8 +34,8 @@ export function TranscriptViewer({
     }
 
     try {
-      // More forgiving regex that captures both chapter headers and regular text
-      const timestampRegex = /(?:(?:^|\n)#\s*([^\[]+))?\s*\[(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?\]\s*((?:(?!\n#|\[\d{2}:\d{2}:\d{2})[\s\S])*)/gm;
+      // More forgiving regex that captures both chapter headers and regular text and speaker
+      const timestampRegex = /(?:(?:^|\n)#\s*([^\[]+))?\s*\[(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?\]\s*(?:\<([^>]+)\>\s*)?((?:(?!\n#|\[\d{2}:\d{2}:\d{2})[\s\S])*)/gm;
       const parsedSegments: TranscriptSegment[] = [];
       let lastTimestamp = 0;
 
@@ -86,14 +88,14 @@ export function TranscriptViewer({
       } else {
         // Process matched segments
         matches.forEach((match, index) => {
-          const [, chapterTitle, hours, minutes, seconds, milliseconds, text] = match;
-          const startTime = parseInt(hours) * 3600 + 
-                        parseInt(minutes) * 60 + 
-                        parseInt(seconds) + 
-                        (milliseconds ? parseInt(milliseconds) / 1000 : 0);
+          const [, chapterTitle, hours, minutes, seconds, milliseconds, speaker, text] = match;
+          const startTime = parseInt(hours) * 3600 +
+            parseInt(minutes) * 60 +
+            parseInt(seconds) +
+            (milliseconds ? parseInt(milliseconds) / 1000 : 0);
 
           // Calculate end time based on next segment or default duration
-          const endTime = index < matches.length - 1 
+          const endTime = index < matches.length - 1
             ? calculateTimeFromMatch(matches[index + 1])
             : startTime + 5;
 
@@ -115,6 +117,7 @@ export function TranscriptViewer({
                   text: paragraph.trim(),
                   start: startTime + (pIndex * 0.001), // Slight offset to maintain order
                   end: endTime,
+                  speaker: speaker?.trim(),
                   isNewParagraph: pIndex > 0
                 });
               }
@@ -157,10 +160,10 @@ export function TranscriptViewer({
   // Helper function to calculate timestamp from regex match
   const calculateTimeFromMatch = (match: RegExpMatchArray): number => {
     const [, , hours, minutes, seconds, milliseconds] = match;
-    return parseInt(hours) * 3600 + 
-           parseInt(minutes) * 60 + 
-           parseInt(seconds) + 
-           (milliseconds ? parseInt(milliseconds) / 1000 : 0);
+    return parseInt(hours) * 3600 +
+      parseInt(minutes) * 60 +
+      parseInt(seconds) +
+      (milliseconds ? parseInt(milliseconds) / 1000 : 0);
   };
 
   return (
@@ -184,14 +187,23 @@ export function TranscriptViewer({
                     {segment.text}
                   </h2>
                 ) : (
-                  <p className="text-lg leading-relaxed font-sans">
-                    <span className="text-xs text-muted-foreground mr-2">
-                      [{Math.floor(segment.start / 3600).toString().padStart(2, '0')}:
-                      {Math.floor((segment.start % 3600) / 60).toString().padStart(2, '0')}:
-                      {Math.floor(segment.start % 60).toString().padStart(2, '0')}]
-                    </span>
-                    {segment.text}
-                  </p>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        [{Math.floor(segment.start / 3600).toString().padStart(2, '0')}:
+                        {Math.floor((segment.start % 3600) / 60).toString().padStart(2, '0')}:
+                        {Math.floor(segment.start % 60).toString().padStart(2, '0')}]
+                      </span>
+                      {segment.speaker && (
+                        <span className="text-xs font-medium px-2 py-0.5 bg-primary/10 rounded-full">
+                          {segment.speaker}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-lg leading-relaxed font-sans">
+                      {segment.text}
+                    </p>
+                  </div>
                 )}
               </div>
             ))
