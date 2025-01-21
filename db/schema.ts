@@ -2,7 +2,7 @@ import { pgTable, text, serial, timestamp, integer, boolean } from "drizzle-orm/
 import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
-import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT } from "@/lib/constants";
+import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -11,6 +11,7 @@ export const users = pgTable("users", {
   openaiApiKey: text("openai_api_key"),
   defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
   todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
+  systemPrompt: text("system_prompt").default(DEFAULT_SYSTEM_PROMPT),
   storageLocation: text("storage_location"),
 });
 
@@ -18,6 +19,9 @@ export const settings = pgTable("settings", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
   openAiKey: text("openai_api_key"),
+  defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
+  todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
+  systemPrompt: text("system_prompt").default(DEFAULT_SYSTEM_PROMPT),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -52,6 +56,7 @@ export const kanbanColumns = pgTable("kanban_columns", {
 
 export const todos = pgTable("todos", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
   projectId: integer("project_id").references(() => projects.id, { onDelete: 'cascade' }),
   text: text("text").notNull(),
   completed: boolean("completed").default(false),
@@ -70,8 +75,8 @@ export const chats = pgTable("chats", {
   timestamp: timestamp("timestamp").notNull().defaultNow(),
 });
 
-// Define a custom vector type for pgvector
-const vector = (size: number) => text("embedding").notNull().$type(`vector(${size})`);
+// Define a custom vector type for pgvector with explicit size parameter
+export const vector = (dimensions: number) => sql<string>`vector(${sql.raw(dimensions.toString())})`;
 
 export const embeddings = pgTable("embeddings", {
   id: serial("id").primaryKey(),
