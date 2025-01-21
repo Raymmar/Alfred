@@ -3,37 +3,38 @@ import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 
-// Users table with settings
+// Users table
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").unique().notNull(),
   password: text("password").notNull(),
-  openaiApiKey: text("openai_api_key"),
-  defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
-  todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
-  systemPrompt: text("system_prompt").default(DEFAULT_SYSTEM_PROMPT),
+  openai_api_key: text("openai_api_key"),
+  default_prompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
+  todo_prompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
+  system_prompt: text("system_prompt").default(DEFAULT_SYSTEM_PROMPT),
   created_at: timestamp("created_at").notNull().defaultNow(),
   updated_at: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// Settings table
 export const settings = pgTable("settings", {
   id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  openAiKey: text("openai_api_key"),
-  defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
-  todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
-  systemPrompt: text("system_prompt").default(DEFAULT_SYSTEM_PROMPT),
+  user_id: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  openai_api_key: text("openai_api_key"),
+  default_prompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
+  todo_prompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
+  system_prompt: text("system_prompt").default(DEFAULT_SYSTEM_PROMPT),
   created_at: timestamp("created_at").notNull().defaultNow(),
   updated_at: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Projects table with recordings and processing results
+// Projects table
 export const projects = pgTable("projects", {
   id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  user_id: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
   title: text("title").notNull(),
   description: text("description"),
-  recordingUrl: text("recording_url"),
+  recording_url: text("recording_url"),
   transcription: text("transcription"),
   summary: text("summary"),
   created_at: timestamp("created_at").notNull().defaultNow(),
@@ -43,16 +44,16 @@ export const projects = pgTable("projects", {
 // Notes table
 export const notes = pgTable("notes", {
   id: serial("id").primaryKey(),
-  projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  project_id: integer("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
   content: text("content").default(""),
   created_at: timestamp("created_at").notNull().defaultNow(),
   updated_at: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // Kanban columns
-export const kanbanColumns = pgTable("kanban_columns", {
+export const kanban_columns = pgTable("kanban_columns", {
   id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  user_id: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
   title: text("title").notNull(),
   order: integer("order").notNull(),
   created_at: timestamp("created_at").notNull().defaultNow(),
@@ -62,9 +63,9 @@ export const kanbanColumns = pgTable("kanban_columns", {
 // Todos
 export const todos = pgTable("todos", {
   id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  projectId: integer("project_id").references(() => projects.id, { onDelete: 'cascade' }),
-  columnId: integer("column_id").references(() => kanbanColumns.id, { onDelete: 'set null' }),
+  user_id: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  project_id: integer("project_id").references(() => projects.id, { onDelete: 'cascade' }),
+  column_id: integer("column_id").references(() => kanban_columns.id, { onDelete: 'set null' }),
   text: text("text").notNull(),
   completed: boolean("completed").default(false),
   order: integer("order").notNull().default(0),
@@ -75,33 +76,33 @@ export const todos = pgTable("todos", {
 // Chats
 export const chats = pgTable("chats", {
   id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  projectId: integer("project_id").references(() => projects.id, { onDelete: 'cascade' }),
+  user_id: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  project_id: integer("project_id").references(() => projects.id, { onDelete: 'cascade' }),
   role: text("role").notNull(),
   content: text("content").notNull(),
   created_at: timestamp("created_at").notNull().defaultNow(),
   updated_at: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Define relations
+// Relations
 export const userRelations = relations(users, ({ many }) => ({
   projects: many(projects),
   todos: many(todos),
-  kanbanColumns: many(kanbanColumns),
+  kanban_columns: many(kanban_columns),
   chats: many(chats),
   settings: many(settings),
 }));
 
 export const settingsRelations = relations(settings, ({ one }) => ({
   user: one(users, {
-    fields: [settings.userId],
+    fields: [settings.user_id],
     references: [users.id],
   }),
 }));
 
 export const projectRelations = relations(projects, ({ one, many }) => ({
   user: one(users, {
-    fields: [projects.userId],
+    fields: [projects.user_id],
     references: [users.id],
   }),
   notes: many(notes),
@@ -111,29 +112,29 @@ export const projectRelations = relations(projects, ({ one, many }) => ({
 
 export const noteRelations = relations(notes, ({ one }) => ({
   project: one(projects, {
-    fields: [notes.projectId],
+    fields: [notes.project_id],
     references: [projects.id],
   }),
 }));
 
 export const todoRelations = relations(todos, ({ one }) => ({
   user: one(users, {
-    fields: [todos.userId],
+    fields: [todos.user_id],
     references: [users.id],
   }),
   project: one(projects, {
-    fields: [todos.projectId],
+    fields: [todos.project_id],
     references: [projects.id],
   }),
-  column: one(kanbanColumns, {
-    fields: [todos.columnId],
-    references: [kanbanColumns.id],
+  column: one(kanban_columns, {
+    fields: [todos.column_id],
+    references: [kanban_columns.id],
   }),
 }));
 
-export const kanbanColumnRelations = relations(kanbanColumns, ({ one, many }) => ({
+export const kanbanColumnRelations = relations(kanban_columns, ({ one, many }) => ({
   user: one(users, {
-    fields: [kanbanColumns.userId],
+    fields: [kanban_columns.user_id],
     references: [users.id],
   }),
   todos: many(todos),
@@ -141,11 +142,11 @@ export const kanbanColumnRelations = relations(kanbanColumns, ({ one, many }) =>
 
 export const chatRelations = relations(chats, ({ one }) => ({
   user: one(users, {
-    fields: [chats.userId],
+    fields: [chats.user_id],
     references: [users.id],
   }),
   project: one(projects, {
-    fields: [chats.projectId],
+    fields: [chats.project_id],
     references: [projects.id],
   }),
 }));
@@ -176,10 +177,10 @@ export const selectTodoSchema = createSelectSchema(todos);
 export type InsertTodo = typeof todos.$inferInsert;
 export type SelectTodo = typeof todos.$inferSelect;
 
-export const insertKanbanColumnSchema = createInsertSchema(kanbanColumns);
-export const selectKanbanColumnSchema = createSelectSchema(kanbanColumns);
-export type InsertKanbanColumn = typeof kanbanColumns.$inferInsert;
-export type SelectKanbanColumn = typeof kanbanColumns.$inferSelect;
+export const insertKanbanColumnSchema = createInsertSchema(kanban_columns);
+export const selectKanbanColumnSchema = createSelectSchema(kanban_columns);
+export type InsertKanbanColumn = typeof kanban_columns.$inferInsert;
+export type SelectKanbanColumn = typeof kanban_columns.$inferSelect;
 
 export const insertChatSchema = createInsertSchema(chats);
 export const selectChatSchema = createSelectSchema(chats);
