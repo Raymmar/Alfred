@@ -1150,6 +1150,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
 
+        console.log("Starting audio processing for project:", {
+          projectId,
+          userId: req.user!.id,
+          recordingPath,
+          timestamp: new Date().toISOString()
+        });
+
         // Convert to MP3 for Whisper
         mp3FilePath = path.join(RECORDINGS_DIR, `temp_${Date.now()}.mp3`);
         await new Promise<void>((resolve, reject) => {
@@ -1198,7 +1205,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Format transcript with timestamps
         const formattingResponse = await openai.chat.completions.create({
-          model: "gpt-4",  // Fixed model name
+          model: "gpt-4",
           messages: [
             {
               role: "system",
@@ -1207,11 +1214,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
    - Identify key topic changes and sections
    - Format as: "# Topic Title"
    - Place at natural topic transitions
-1. Regular Timestamps:
+2. Regular Timestamps:
    - Add timestamps [HH:MM:SS.mmm] every 10-30 seconds
    - Place at natural speech breaks
    - Keep timestamps sequential
-1.
 
 Format Rules:
 - Be sure to send back all of the text
@@ -1237,9 +1243,11 @@ Format Rules:
 
         const formattedTranscript = formattingResponse.choices[0].message.content.trim();
 
+        console.log("Successfully formatted transcript");
+
         // Generate title using GPT-4
         const titleResponse = await openai.chat.completions.create({
-          model: "gpt-4",  // Fixed model name
+          model: "gpt-4",
           messages: [
             {
               role: "system",
@@ -1260,28 +1268,32 @@ Format Rules:
 
         const title = titleResponse.choices[0].message.content.trim();
 
-        // Generate summary using custom primary prompt
-        const summaryResponse = await createChatCompletion({
+        console.log("Generated title:", title);
+
+        // Generate insights using user's primary prompt
+        const summaryResult = await createChatCompletion({
           userId: req.user!.id,
           message: formattedTranscript,
-          promptType: 'primary', // Use primary prompt for insights
+          promptType: 'primary',
           context: {
             projectId,
             transcription: formattedTranscript,
           }
         });
 
-        if (!summaryResponse.ok) {
-          throw new Error(`Failed to generate summary: ${summaryResponse.message}`);
+        if (!summaryResult.message) {
+          throw new Error("Failed to generate summary");
         }
 
-        const summary = summaryResponse.data;
+        const summary = summaryResult.message;
 
-        // Extract tasks using custom todo prompt
-        const taskResponse = await createChatCompletion({
+        console.log("Generated summary using primary prompt");
+
+        // Extract tasks using user's todo prompt
+        const taskResult = await createChatCompletion({
           userId: req.user!.id,
           message: formattedTranscript,
-          promptType: 'todo', // Use todo prompt for task extraction
+          promptType: 'todo',
           context: {
             projectId,
             transcription: formattedTranscript,
@@ -1289,11 +1301,13 @@ Format Rules:
           }
         });
 
-        if (!taskResponse.ok) {
-          throw new Error(`Failed to extract tasks: ${taskResponse.message}`);
+        if (!taskResult.message) {
+          throw new Error("Failed to extract tasks");
         }
 
-        const taskContent = taskResponse.data;
+        const taskContent = taskResult.message;
+
+        console.log("Generated tasks using todo prompt");
 
         // Process extracted tasks if valid
         if (taskContent && !isEmptyTaskResponse(taskContent)) {
@@ -1330,6 +1344,13 @@ Format Rules:
         // Clean up any empty tasks
         await cleanupEmptyTasks(projectId);
 
+        console.log("Successfully processed recording for project:", {
+          projectId,
+          userId: req.user!.id,
+          taskCount: taskContent ? taskContent.split('\n').length : 0,
+          timestamp: new Date().toISOString()
+        });
+
         res.json(updatedProject);
 
       } catch (error) {
@@ -1345,7 +1366,6 @@ Format Rules:
             .catch(err => console.error("Failed to clean up temporary MP3 file:", err));
         }
       }
-
     });
 
     app.delete("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
