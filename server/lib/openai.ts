@@ -274,8 +274,8 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
         { role: "system", content: systemMessage },
         { role: "user", content: message },
       ],
-      temperature: 0.7,
-      max_tokens: 500,
+      temperature: 0.2,
+      max_tokens: 8000,
     });
 
     const assistantResponse = response.choices[0].message.content || "";
