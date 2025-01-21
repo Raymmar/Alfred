@@ -10,7 +10,7 @@ import {
   chats,
   kanban_columns
 } from "@db/schema";
-import { desc, eq, and, asc, or } from "drizzle-orm";
+import { desc, eq, and, asc } from "drizzle-orm";
 import formidable from "formidable";
 import { spawn } from "child_process";
 import express from "express";
@@ -1318,52 +1318,38 @@ Format Rules:
     });
     app.get("/api/todos", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
-        const userTodos = await db
-          .select({
-            id: todos.id,
-            text: todos.text,
-            completed: todos.completed,
-            columnId: todos.columnId,
-            order: todos.order,
-            createdAt: todos.createdAt,
-            updatedAt: todos.updatedAt,
-            projectId: todos.projectId,
-            project: {
-              title: projects.title,
-            },
-          })
-          .from(todos)
-          .innerJoin(projects, eq(todos.projectId, projects.id))
-          .where(eq(projects.userId, req.user!.id))
-          .orderBy(desc(projects.createdAt));
-        res.json(userTodos);
-      } catch (error: any) {
-        console.error("Error fetching todos:", error);
-        res.status(500).json({
-          message: "Failed to fetch todos",
-          error: error.message,
+        const userTodos = await db.query.todos.findMany({
+          where: eq(todos.user_id, req.user!.id),
+          orderBy: [asc(todos.created_at)],
+          with: {
+            project: true
+          }
         });
+        res.json(userTodos);
+      } catch (error) {
+        console.error("Error fetching todos:", error);
+        res.status(500).json({ message: "Failed to fetch todos" });
       }
     });
+
     app.get("/api/kanban/columns", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const columns = await db.query.kanban_columns.findMany({
-          orderBy: (columns, { asc }) => [asc(columns.order)],
+          where: eq(kanban_columns.user_id, req.user!.id),
+          orderBy: [asc(kanban_columns.order)],
           with: {
             todos: {
-              orderBy: (todos, { asc }) => [asc(todos.order)],
-            },
-          },
+              orderBy: [asc(todos.order)]
+            }
+          }
         });
         res.json(columns);
-      } catch (error: any) {
-        console.error("Error fetching Kanban columns:", error);
-        res.status(500).json({
-          message: "Failed to fetch Kanban columns",
-          error: error.message,
-        });
+      } catch (error) {
+        console.error("Error fetching kanban columns:", error);
+        res.status(500).json({ message: "Failed to fetch columns" });
       }
     });
+
     app.post("/api/kanban/columns", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const { title } = req.body;
@@ -1393,177 +1379,6 @@ Format Rules:
         });
       }
     });
-    app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
-      try {
-        const todoId = parseInt(req.params.id);
-        const { text, completed, columnId, order } = req.body;
-        const [todo] = await db.query.todos.findMany({
-          where: eq(todos.id, todoId),
-          limit: 1,
-          with: {
-            project: true,
-          },
-        });
-        if (!todo) {
-          return res.status(404).json({ message: "Todo not found" });
-        }
-        if (todo.project?.userId !== req.user!.id) {
-          return res.status(403).json({ message: "Not authorized" });
-        }
-        const updateData: Partial<typeof todos.$inferInsert> = {
-          updatedAt: new Date(),
-        };
-        if (typeof text === "string" && text.trim()) {
-          updateData.text = text.trim();
-        }
-        if (typeof completed === "boolean") {
-          updateData.completed = completed;
-        }
-        if (typeof columnId === "number") {
-          updateData.columnId = columnId;
-        }
-        if (typeof order === "number") {
-          updateData.order = order;
-        }
-        const [updatedTodo] = await db
-          .update(todos)
-          .set(updateData)
-          .where(eq(todos.id, todoId))
-          .returning();
-        if (!updatedTodo) {
-          throw new Error("Update operation failed");
-        }
-        res.json(updatedTodo);
-      } catch (error: any) {
-        console.error("Error updating todo:", error);
-        res.status(500).json({
-          message: "Failed to update todo",
-          error: error.message,
-        });
-      }
-    });
-    app.put("/api/projects/:id/summary", requireAuth, async (req: AuthRequest, res: Response) => {
-      try {
-        const projectId = parseInt(req.params.id);
-        const { summary } = req.body;
-  
-        if (typeof summary !== "string") {
-          return res.status(400).json({ message: "Invalid summary content" });
-        }
-  
-        const [project] = await db.query.projects.findMany({
-          where: eq(projects.id, projectId),
-          limit: 1,
-        });
-  
-        if (!project) {
-          return res.status(404).json({ message: "Project not found" });
-        }
-  
-        if (project.userId !== req.user!.id) {
-          return res.status(403).json({ message: "Not authorized" });
-        }
-  
-        const [updatedProject] = await db
-          .update(projects)
-          .set({
-            summary,
-            updatedAt: new Date(),
-          })
-          .where(eq(projects.id, projectId))
-          .returning();
-  
-        res.json(updatedProject);
-      } catch (error: any) {
-        console.error("Error updating project summary:", error);
-        res.status(500).json({
-          message: "Failed to update project summary",
-          error: error.message,
-        });
-      }
-    });
-    app.get("/api/chats/:projectId?", requireAuth, async (req: AuthRequest, res: Response) => {
-      try {
-        const projectId = req.params.projectId
-          ? parseInt(req.params.projectId)
-          : undefined;
-        const conditions = [eq(chats.userId, req.user!.id)];
-  
-        if (projectId) {
-          conditions.push(eq(chats.projectId, projectId));
-        }
-  
-        const messages = await db.query.chats.findMany({
-          where: and(...conditions),
-          orderBy: asc(chats.timestamp),
-        });
-        res.json(messages);
-      } catch (error: any) {
-        console.error("Error fetching chats:", error);
-        res.status(500).json({
-          message: "Failed to fetch chats",
-          error: error.message,
-        });
-      }
-    });
-    app.post("/api/todos", requireAuth, async (req: AuthRequest, res: Response) => {
-      try {
-        const { text, projectId } = req.body;
-        if (typeof text !== "string" || !text.trim()) {
-          return res.status(400).json({ message: "Invalid task text" });
-        }
-  
-        // If no projectId is provided, find or create personal project
-        let effectiveProjectId = projectId;
-        if (!projectId) {
-          // Find personal project
-          const [personalProject] = await db.query.projects.findMany({
-            where: and(
-              eq(projects.userId, req.user!.id),
-              eq(projects.recordingUrl, 'personal.none')
-            ),
-            limit: 1,
-          });
-  
-          if (personalProject) {
-            effectiveProjectId = personalProject.id;
-          } else {
-            // Create personal project if it doesn't exist
-            const [newPersonalProject] = await db.insert(projects)
-              .values({
-                userId: req.user!.id,
-                title: 'Personal Tasks',
-                description: 'Your personal tasks',
-                recordingUrl: 'personal.none',
-                createdAt: new Date(),
-                updatedAt: new Date(),
-              })
-              .returning();
-            effectiveProjectId = newPersonalProject.id;
-          }
-        }
-  
-        const [todo] = await db.insert(todos)
-          .values({
-            text: text.trim(),
-            projectId: effectiveProjectId,
-            completed: false,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            order: 0,
-          })
-          .returning();
-  
-        res.json(todo);
-      } catch (error: any) {
-        console.error("Error creating todo:", error);
-        res.status(500).json({
-          message: "Failed to create todo",
-          error: error.message,
-        });
-      }
-    });
-  
     app.patch("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
       try {
         const todoId = parseInt(req.params.id);
