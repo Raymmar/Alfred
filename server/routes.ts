@@ -1198,7 +1198,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Format transcript with timestamps
         const formattingResponse = await openai.chat.completions.create({
-          model: "gpt-4",
+          model: "gpt-4",  // Fixed model name
           messages: [
             {
               role: "system",
@@ -1237,9 +1237,9 @@ Format Rules:
 
         const formattedTranscript = formattingResponse.choices[0].message.content.trim();
 
-        // Generate title
+        // Generate title using GPT-4
         const titleResponse = await openai.chat.completions.create({
-          model: "gpt-4",
+          model: "gpt-4",  // Fixed model name
           messages: [
             {
               role: "system",
@@ -1260,11 +1260,11 @@ Format Rules:
 
         const title = titleResponse.choices[0].message.content.trim();
 
-        // Use createChatCompletion for insights with primary prompt
+        // Generate summary using custom primary prompt
         const summaryResponse = await createChatCompletion({
           userId: req.user!.id,
           message: formattedTranscript,
-          promptType: 'primary', // Use primary prompt for main insights
+          promptType: 'primary', // Use primary prompt for insights
           context: {
             projectId,
             transcription: formattedTranscript,
@@ -1272,12 +1272,12 @@ Format Rules:
         });
 
         if (!summaryResponse.ok) {
-          throw new Error(summaryResponse.message);
+          throw new Error(`Failed to generate summary: ${summaryResponse.message}`);
         }
 
-        const summary = summaryResponse.data.trim();
+        const summary = summaryResponse.data;
 
-        // Use createChatCompletion for tasks with todo prompt
+        // Extract tasks using custom todo prompt
         const taskResponse = await createChatCompletion({
           userId: req.user!.id,
           message: formattedTranscript,
@@ -1290,13 +1290,13 @@ Format Rules:
         });
 
         if (!taskResponse.ok) {
-          throw new Error(taskResponse.message);
+          throw new Error(`Failed to extract tasks: ${taskResponse.message}`);
         }
 
-        const taskContent = taskResponse.data.trim();
+        const taskContent = taskResponse.data;
 
-        // Only process tasks if we have valid content
-        if (!isEmptyTaskResponse(taskContent)) {
+        // Process extracted tasks if valid
+        if (taskContent && !isEmptyTaskResponse(taskContent)) {
           const tasks = taskContent
             .split('\n')
             .map(line => line.trim())
@@ -1345,6 +1345,7 @@ Format Rules:
             .catch(err => console.error("Failed to clean up temporary MP3 file:", err));
         }
       }
+
     });
 
     app.delete("/api/todos/:id", requireAuth, async (req: AuthRequest, res: Response) => {
