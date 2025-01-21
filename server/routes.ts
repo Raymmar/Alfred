@@ -17,7 +17,7 @@ import express from "express";
 import path, { join } from "path";
 import fs, { existsSync } from "fs";
 import { ensureStorageDirectory, getRecordingsPath, cleanupOrphanedRecordings, getAudioContentType, isValidAudioFile } from "./storage";
-import { createAIServices, createChatService } from "./lib/ai";
+import { createChatCompletion } from "./lib/openai";
 import { RequestHandler } from "express-serve-static-core";
 import OpenAI from "openai";
 
@@ -432,10 +432,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
               timestamp: new Date(),
             }).returning();
 
-            const services = await createAIServices(req.user!.id);
-            const aiResponse = await services.chat.generateResponse({
+            const aiResponse = await createChatCompletion({
               userId: req.user!.id,
-              message: message.trim()
+              message: message.trim(),
             });
 
             const [assistantMsg] = await tx.insert(chats).values({
@@ -528,8 +527,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             timestamp: new Date(),
           }).returning();
 
-          const services = await createAIServices(req.user!.id);
-          const aiResponse = await services.chat.generateResponse({
+          const aiResponse = await createChatCompletion({
             userId: req.user!.id,
             message: message.trim(),
             context: {
@@ -1230,10 +1228,8 @@ Format Rules:
 
         const title = titleResponse.choices[0].message.content.trim();
 
-        // Use AI services for insights and tasks
-        const chatService = await createChatService(req.user!.id);
-        
-        const summaryResponse = await chatService.createChatCompletion({
+        // Use createChatCompletion for insights with consolidated prompts
+        const summaryResponse = await createChatCompletion({
           userId: req.user!.id,
           message: formattedTranscript,
           context: {
@@ -1245,7 +1241,8 @@ Format Rules:
 
         const summary = summaryResponse.message.trim();
 
-        const taskResponse = await chatService.createChatCompletion({
+        // Use createChatCompletion for tasks with consolidated prompts
+        const taskResponse = await createChatCompletion({
           userId: req.user!.id,
           message: formattedTranscript,
           context: {
