@@ -185,33 +185,22 @@ export async function createChatCompletion({
     throw new Error("OpenAI API key not found. Please add your API key in settings.");
   }
 
-  // Use user's custom prompts or fall back to defaults
-  const primaryPrompt = userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT;
-  const todoPrompt = userSettings?.todoPrompt || DEFAULT_TODO_PROMPT;
-  const systemPrompt = userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+  // Use user's custom prompts or fall back to defaults based on prompt type
+  const getPrompt = (type: 'primary' | 'todo' | 'system', settings: any): string => {
+    switch (type) {
+      case 'primary':
+        return settings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT;
+      case 'todo':
+        return settings?.todoPrompt || DEFAULT_TODO_PROMPT;
+      case 'system':
+        return settings?.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+    }
+  };
 
-  const openai = new OpenAI({
-    apiKey,
-  });
-
-  const userData = await getContextData(userId);
-  const { enhancedContext, similarityScore } = await updateChatContext(userId, message);
-
-  const { recommendations: recommendedTasks } = await findRecommendedTasks(userId, message, {
-    limit: 5,
-    minSimilarity: 0.5,
-    includeCompleted: false
-  });
-
-  // Select the appropriate prompt based on the promptType
-  const basePrompt = promptType === 'todo'
-    ? (userSettings?.todoPrompt || DEFAULT_TODO_PROMPT)
-    : promptType === 'primary'
-      ? (userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT)
-      : (userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT);
+  const prompt = getPrompt(promptType, userSettings);
 
   // Build system message with enhanced contextual awareness and selected prompt
-  let systemMessage = `${basePrompt}\n\nDatabase Context:
+  let systemMessage = `${prompt}\n\nDatabase Context:
 Total Projects: ${userData.totalProjects}
 Total Recordings: ${userData.totalRecordings}
 Total Tasks: ${userData.totalTodos} (${userData.totalCompletedTodos} completed)

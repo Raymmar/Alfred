@@ -431,65 +431,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
     app.post("/api/chat", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          if (!req.user?.id) {
-            return res.status(401).json({ message: "Not authenticated" });
-          }
-
-          const { message } = req.body;
-
-          if (typeof message !== "string" || !message.trim()) {
-            return res.status(400).json({ message: "Invalid message" });
-          }
-
-          // Create both messages in a transaction to ensure consistency
-          const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
-            // Insert user message
-            const [userMsg] = await tx.insert(chats).values({
-              userId: req.user!.id,
-              role: "user",
-              content: message.trim(),
-              projectId: null,
-              timestamp: new Date(),
-            }).returning();
-
-            // Get AI response
-            const aiResponse = await createChatCompletion({
-              userId: req.user!.id,
-              message: message.trim(),
-            });
-
-            // Insert assistant message
-            const [assistantMsg] = await tx.insert(chats).values({
-              userId: req.user!.id,
-              role: "assistant",
-              content: aiResponse.message,
-              projectId: null,
-              timestamp: new Date(),
-            }).returning();
-
-            return [userMsg, assistantMsg];
-          });
-
-          // Log the chat interaction
-          console.log('Chat interaction completed:', {
-            userId: req.user.id,
-            messageIds: [userMessage.id, assistantMessage.id],
-            timestamp: new Date().toISOString()
-          });
-
-          res.json({
-            message: assistantMessage.content,
-            messages: [userMessage, assistantMessage]
-          });
-
-        } catch (error: any) {
-          console.error("Chat error:", error);
-          res.status(500).json({
-            message: error.message || "Failed to generate response",
-          });
+      try {
+        if (!req.user?.id) {
+          return res.status(401).json({ message: "Not authenticated" });
         }
-      });
+
+        const { message } = req.body;
+
+        if (typeof message !== "string" || !message.trim()) {
+          return res.status(400).json({ message: "Invalid message" });
+        }
+
+        // Create both messages in a transaction to ensure consistency
+        const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
+          // Insert user message
+          const [userMsg] = await tx.insert(chats).values({
+            userId: req.user!.id,
+            role: "user",
+            content: message.trim(),
+            projectId: null,
+            timestamp: new Date(),
+          }).returning();
+
+          // Get AI response using system prompt
+          const aiResponse = await createChatCompletion({
+            userId: req.user!.id,
+            message: message.trim(),
+            promptType: 'system', // Use system prompt for general chat
+          });
+
+          if (!aiResponse.ok) {
+            throw new Error(aiResponse.message);
+          }
+
+          // Insert assistant message
+          const [assistantMsg] = await tx.insert(chats).values({
+            userId: req.user!.id,
+            role: "assistant",
+            content: aiResponse.data,
+            projectId: null,
+            timestamp: new Date(),
+          }).returning();
+
+          return [userMsg, assistantMsg];
+        });
+
+        res.json({
+          message: assistantMessage.content,
+          messages: [userMessage, assistantMessage]
+        });
+
+      } catch (error: any) {
+        console.error("Chat error:", error);
+        res.status(500).json({
+          message: error.message || "Failed to generate response",
+        });
+      }
+    });
 
     app.get("/api/projects/:projectId/messages", requireAuth, async (req: AuthRequest, res: Response) => {
         try {
@@ -526,67 +524,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
     app.post("/api/projects/:projectId/chat", requireAuth, async (req: AuthRequest, res: Response) => {
-        try {
-          const projectId = parseInt(req.params.projectId);
-          if (isNaN(projectId)) {
-            return res.status(400).json({ message: "Invalid project ID" });
-          }
-
-          const { message } = req.body;
-          if (typeof message !== "string" || !message.trim()) {
-            return res.status(400).json({ message: "Invalid message" });
-          }
-
-          const [project] = await db.query.projects.findMany({
-            where: eq(projects.id, projectId),
-            limit: 1,
-          });
-
-          if (!project) {
-            return res.status(404).json({ message: "Project not found" });
-          }
-
-          if (project.userId !== req.user!.id) {
-            return res.status(403).json({ message: "Not authorized" });
-          }
-
-          const [userMessage] = await db.insert(chats).values({
-            userId: req.user!.id,
-            projectId,
-            role: "user",
-            content: message.trim(),
-            timestamp: new Date(),
-          }).returning();
-
-          const aiResponse = await createChatCompletion({
-            userId: req.user!.id,
-            message: message.trim(),
-            context: {
-              transcription: project.transcription,
-              summary: project.summary,
-              notes: project.notes,
-            },
-          });
-
-          const [assistantMessage] = await db.insert(chats).values({
-            userId: req.user!.id,
-            projectId,
-            role: "assistant",
-            content: aiResponse.message,
-            timestamp: new Date(),
-          }).returning();
-
-          res.json({
-            message: aiResponse.message,
-            messages: [userMessage, assistantMessage]
-          });
-        } catch (error: any) {
-          console.error("Project chat error:", error);
-          res.status(500).json({
-            message: error.message || "Failed to generate response",
-          });
+      try {
+        const projectId = parseInt(req.params.projectId);
+        if (isNaN(projectId)) {
+          return res.status(400).json({ message: "Invalid project ID" });
         }
-      });
+
+        const { message } = req.body;
+        if (typeof message !== "string" || !message.trim()) {
+          return res.status(400).json({ message: "Invalid message" });
+        }
+
+        const [project] = await db.query.projects.findMany({
+          where: eq(projects.id, projectId),
+          limit: 1,
+        });
+
+        if (!project) {
+          return res.status(404).json({ message: "Project not found" });
+        }
+
+        if (project.userId !== req.user!.id) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+
+        const [userMessage] = await db.insert(chats).values({
+          userId: req.user!.id,
+          projectId,
+          role: "user",
+          content: message.trim(),
+          timestamp: new Date(),
+        }).returning();
+
+        // Get AI response using system prompt
+        const aiResponse = await createChatCompletion({
+          userId: req.user!.id,
+          message: message.trim(),
+          promptType: 'system', // Use system prompt for project-specific chat
+          context: {
+            transcription: project.transcription,
+            summary: project.summary,
+          },
+        });
+
+        if (!aiResponse.ok) {
+          throw new Error(aiResponse.message);
+        }
+
+        const [assistantMessage] = await db.insert(chats).values({
+          userId: req.user!.id,
+          projectId,
+          role: "assistant",
+          content: aiResponse.data,
+          timestamp: new Date(),
+        }).returning();
+
+        res.json({
+          message: aiResponse.data,
+          messages: [userMessage, assistantMessage]
+        });
+      } catch (error: any) {
+        console.error("Project chat error:", error);
+        res.status(500).json({
+          message: error.message || "Failed to generate response",
+        });
+      }
+    });
 
     app.get(
       "/api/recordings/:filename/download",
@@ -949,7 +952,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ) {
             return res.status(400).json({
               message:
-                "Invalid input: API key, default prompt, and todo prompt must be strings",
+                "Invalid input: API key, default promptand todo prompt must be strings",
             });
           }
           const [updatedUser] = await db
@@ -1111,194 +1114,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: "Invalid project ID" });
         }
 
+        // First get the project to ensure it exists and belongs to the user
         const [project] = await db.query.projects.findMany({
           where: and(
             eq(projects.id, projectId),
             eq(projects.userId, req.user!.id)
           ),
           limit: 1,
-          with: {
-            note: true,
-          },
         });
 
         if (!project) {
           return res.status(404).json({ message: "Project not found" });
         }
 
-        if (!project.recordingUrl) {
-          return res.status(400).json({ message: "No recording file associated with this project" });
+        if (!project.transcription) {
+          return res.status(400).json({ message: "Project must be transcribed first" });
         }
 
-        const [user] = await db.query.users.findMany({
-          where: eq(users.id, req.user!.id),
-          limit: 1,
-        });
-
-        if (!user.openaiApiKey) {
-          return res.status(400).json({ message: "OpenAI API key not set" });
-        }
-
-        const openai = new OpenAI({ apiKey: user.openaiApiKey });
-        const recordingPath = path.join(RECORDINGS_DIR, project.recordingUrl);
-
-        try {
-          await fs.promises.access(recordingPath, fs.constants.R_OK);
-        } catch (error) {
-          console.error("Recording file access error:", error);
-          return res.status(404).json({
-            message: "Recording file not found or not accessible",
-          });
-        }
-
-        // Convert to MP3 for Whisper
-        mp3FilePath = path.join(RECORDINGS_DIR, `temp_${Date.now()}.mp3`);
-        await new Promise<void>((resolve, reject) => {
-          const ffmpeg = spawn("ffmpeg", [
-            "-i", recordingPath,
-            "-vn",
-            "-acodec", "libmp3lame",
-            "-ab", "128k",
-            "-ar", "44100",
-            "-af", "silenceremove=1:0:-50dB",
-            "-y",
-            mp3FilePath,
-          ]);
-
-          ffmpeg.on("error", (error) => {
-            console.error("FFmpeg process error:", error);
-            reject(new Error(`FFmpeg process failed: ${error.message}`));
-          });
-
-          ffmpeg.stdout.on("data", (data) => {
-            console.log("FFmpeg stdout:", data.toString());
-          });
-
-          ffmpeg.stderr.on("data", (data) => {
-            console.log("FFmpeg stderr:", data.toString());
-          });
-
-          ffmpeg.on("close", (code) => {
-            if (code === 0) resolve();
-            else reject(new Error(`FFmpeg process exited with code ${code}`));
-          });
-        });
-
-        // Get transcription
-        console.log("Starting Whisper transcription");
-        const transcriptionResponse = await openai.audio.transcriptions.create({
-          file: fs.createReadStream(mp3FilePath),
-          model: "whisper-1",
-        });
-
-        if (!transcriptionResponse.text) {
-          throw new Error("No transcription received from OpenAI");
-        }
-
-        console.log("Transcription successful, length:", transcriptionResponse.text.length);
-
-        // Format transcript with timestamps
-        const formattingResponse = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content: `Format the transcript with only these elements:
-1. Chapter Headers:
-   - Identify key topic changes and sections
-   - Format as: "# Topic Title"
-   - Place at natural topic transitions
-1. Regular Timestamps:
-   - Add timestamps [HH:MM:SS.mmm] every 10-30 seconds
-   - Place at natural speech breaks
-   - Keep timestamps sequential
-1.
-
-Format Rules:
-- Be sure to send back all of the text
-- Always start at the beginning of the recording at 00:00:00
-- Each timestamp must be in [HH:MM:SS.mmm] format
-- Begin with a chapter header
-- Do not add intro or additional formatting
-- Add timestamps every 10-30 seconds
-- Preserve original text content exactly`,
-            },
-            {
-              role: "user",
-              content: transcriptionResponse.text,
-            },
-          ],
-          temperature: 0.3,
-          max_tokens: 4000,
-        });
-
-        if (!formattingResponse.choices[0]?.message?.content) {
-          throw new Error("No formatted transcript generated");
-        }
-
-        const formattedTranscript = formattingResponse.choices[0].message.content.trim();
-
-        // Generate title
-        const titleResponse = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content: "Generate a clear, concise title (max 60 chars) based on the transcript content. Do not insert any additional formatting or punctuation",
-            },
-            {
-              role: "user",
-              content: formattedTranscript,
-            },
-          ],
-          temperature: 0.7,
-          max_tokens: 60,
-        });
-
-        if (!titleResponse.choices[0]?.message?.content) {
-          throw new Error("No title generated");
-        }
-
-        const title = titleResponse.choices[0].message.content.trim();
-
-        // Use createChatCompletion for insights with consolidated prompts
-        const summaryResponse = await createChatCompletion({
+        // Generate insights using the primary prompt
+        const insightsResponse = await createChatCompletion({
           userId: req.user!.id,
-          message: formattedTranscript,
+          message: `Process this transcription and provide insights: ${project.transcription}`,
+          promptType: 'primary', // Use primary prompt for main insights
           context: {
-            projectId,
-            transcription: formattedTranscript,
-          },
-          promptType: 'primary'
+            transcription: project.transcription,
+          }
         });
 
-        const summary = summaryResponse.message.trim();
+        if (!insightsResponse.ok) {
+          throw new Error(insightsResponse.message);
+        }
 
-        // Use createChatCompletion for tasks with consolidated prompts
-        const taskResponse = await createChatCompletion({
+        // Extract tasks using the todo prompt
+        const tasksResponse = await createChatCompletion({
           userId: req.user!.id,
-          message: formattedTranscript,
+          message: `Extract tasks from this transcription: ${project.transcription}`,
+          promptType: 'todo', // Use todo prompt for task extraction
           context: {
-            projectId,
-            transcription: formattedTranscript,
-            summary
-          },
-          promptType: 'todo'
+            transcription: project.transcription,
+          }
         });
 
-        const taskContent = taskResponse.message.trim();
+        if (!tasksResponse.ok) {
+          throw new Error(tasksResponse.message);
+        }
 
-        // Only process tasks if we have valid content
-        if (!isEmptyTaskResponse(taskContent)) {
-          const tasks = taskContent
+        // Process tasks response
+        let extractedTasks = [];
+        if (tasksResponse.data && !isEmptyTaskResponse(tasksResponse.data)) {
+          const taskLines = tasksResponse.data
             .split('\n')
-            .map(line => line.trim())
-            .filter(Boolean)
-            .filter(line => !isEmptyTaskResponse(line));
+            .filter(line => line.trim())
+            .map(line => line.replace(/^[-*]\s*/, '').trim());
 
-          for (const task of tasks) {
-            if (!(await isDuplicateTask(task, projectId))) {
-              await db.insert(todos).values({
+          for (const task of taskLines) {
+            if (!isEmptyTaskResponse(task) && !(await isDuplicateTask(task, projectId))) {
+              extractedTasks.push({
                 projectId,
                 text: task,
                 completed: false,
@@ -1309,34 +1180,35 @@ Format Rules:
           }
         }
 
-        // Update project with processed information
-        const [updatedProject] = await db.update(projects)
-          .set({
-            title,
-            transcription: formattedTranscript,
-            summary,
-            updatedAt: new Date(),
-          })
-          .where(eq(projects.id, projectId))
-          .returning();
+        // Update project with insights and create tasks
+        const [updatedProject] = await db.transaction(async (tx) => {
+          // Update project with insights
+          const [updated] = await tx
+            .update(projects)
+            .set({
+              summary: insightsResponse.data,
+              updatedAt: new Date(),
+            })
+            .where(eq(projects.id, projectId))
+            .returning();
 
-        // Clean up any empty tasks
+          // Insert tasks if any were extracted
+          if (extractedTasks.length > 0) {
+            await tx.insert(todos).values(extractedTasks);
+          }
+
+          return [updated];
+        });
+
+        // Clean up any empty tasks that might have been created
         await cleanupEmptyTasks(projectId);
 
-        res.json(updatedProject);
-
-      } catch (error) {
-        console.error("Processing error:", error);
-        res.status(500).json({
-          message: "Failed to process recording",
-          error: error instanceof Error ? error.message : String(error),
+        return res.json(updatedProject);
+      } catch (error: any) {
+        console.error("Error processing audio:", error);
+        return res.status(500).json({
+          message: error.message || "Failed to process audio",
         });
-      } finally {
-        // Cleanup temporary MP3 file
-        if (mp3FilePath && fs.existsSync(mp3FilePath)) {
-          await fs.promises.unlink(mp3FilePath)
-            .catch(err => console.error("Failed to clean up temporary MP3 file:", err));
-        }
       }
     });
 
