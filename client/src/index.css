@@ -116,24 +116,6 @@
   font-size: 1.125rem !important;
 }
 
-.ProseMirror h1,
-.prose h1 {
-  font-size: 1.5rem !important;
-  line-height: 1.5rem !important;
-}
-
-.ProseMirror h2,
-.prose h2 {
-  font-size: 1.25rem !important;
-  line-height: 1.75rem !important;
-}
-
-.ProseMirror h3,
-.prose h3 {
-  font-size: 1rem !important;
-  line-height: 1.5rem !important;
-}
-
 .ProseMirror li p,
 .prose li p {
   margin: .25rem !important;
