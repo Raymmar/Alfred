@@ -102,28 +102,6 @@ export async function cleanupEmptyTasks(projectId: number): Promise<void> {
   }
 }
 
-  // Check exact matches
-  if (excludedPhrases.includes(trimmedText)) {
-    return true;
-  }
-
-  // Check for phrases
-  const hasPhrase = excludedPhrases.some(phrase => trimmedText.includes(phrase));
-  
-  // Check for patterns
-  const patterns = [
-    /^no\s+.*\s+found/i,
-    /^could\s+not\s+.*\s+any/i,
-    /^unable\s+to\s+.*\s+any/i,
-    /^did\s+not\s+.*\s+any/i,
-    /^none\s+.*\s+found/i,
-    /^no\s+.*\s+identified/i,
-  ];
-
-  const matchesPattern = patterns.some(pattern => pattern.test(trimmedText));
-
-  return hasPhrase || matchesPattern;
-}
 
 export class TaskExtractionService {
   private client: OpenAI;
@@ -185,7 +163,7 @@ export class TaskExtractionService {
           const priority = priorityMatch ? 
             priorityMatch[1].toLowerCase() as 'high' | 'medium' | 'low' : 
             'medium';
-          
+
           return {
             text: text.replace(/\[(high|medium|low)\]$/i, '').trim(),
             priority
