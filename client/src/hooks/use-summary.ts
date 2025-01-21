@@ -34,30 +34,27 @@ export function useSummary({ projectId }: UseSummaryProps) {
     staleTime: Infinity,
   });
 
-  // Update content when project data changes, ensuring HTML format
+  // Update content when project data changes, ensuring correct formatting
   useEffect(() => {
     if (project?.summary) {
-      // If the content doesn't look like HTML (no tags), wrap it in paragraph tags
-      const content = project.summary;
-      const hasHtmlTags = /<[a-z][\s\S]*>/i.test(content);
-      setContent(hasHtmlTags ? content : `<p>${content}</p>`);
+      setContent(project.summary);
     }
   }, [project]);
 
-  // Save mutation with array queryKey format and HTML preservation
+  // Save mutation with correct prompt type
   const { mutateAsync: saveSummary } = useMutation({
     mutationFn: async (content: string) => {
       if (!projectId) {
         throw new Error('No project ID provided');
       }
 
-      // Ensure the content is properly formatted as HTML
-      const formattedContent = content.trim();
-
       const response = await fetch(`/api/projects/${projectId}/summary`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ summary: formattedContent }),
+        body: JSON.stringify({
+          summary: content,
+          promptType: 'primary' // Explicitly set promptType for insights
+        }),
       });
 
       if (!response.ok) {

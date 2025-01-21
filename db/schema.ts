@@ -11,6 +11,7 @@ export const users = pgTable("users", {
   openaiApiKey: text("openai_api_key"),
   defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
   todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
+  systemPrompt: text("system_prompt").default('You are a concise assistant. Provide clear, focused insights from the content. Format output in markdown. Keep responses brief and actionable.'),
   storageLocation: text("storage_location"),
 });
 
