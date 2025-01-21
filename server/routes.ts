@@ -17,7 +17,7 @@ import express from "express";
 import path, { join } from "path";
 import fs, { existsSync } from "fs";
 import { ensureStorageDirectory, getRecordingsPath, cleanupOrphanedRecordings, getAudioContentType, isValidAudioFile } from "./storage";
-import { createChatCompletion } from "./lib/openai";
+import { createAIServices } from "./lib/ai";
 import { RequestHandler } from "express-serve-static-core";
 import OpenAI from "openai";
 
@@ -423,34 +423,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return res.status(400).json({ message: "Invalid message" });
           }
 
-          const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
-            const [userMsg] = await tx.insert(chats).values({
-              userId: req.user!.id,
-              role: "user",
-              content: message.trim(),
-              projectId: null,
-              timestamp: new Date(),
-            }).returning();
-
-            const aiResponse = await createChatCompletion({
-              userId: req.user!.id,
-              message: message.trim(),
-            });
-
-            const [assistantMsg] = await tx.insert(chats).values({
-              userId: req.user!.id,
-              role: "assistant",
-              content: aiResponse.message,
-              projectId: null,
-              timestamp: new Date(),
-            }).returning();
-
-            return [userMsg, assistantMsg];
+          const services = await createAIServices(req.user!.id);
+          const chatResponse = await services.chat.createChatCompletion({
+            userId: req.user!.id,
+            message: message.trim(),
           });
 
+          if (chatResponse.error) {
+            throw new Error(chatResponse.error);
+          }
+
           res.json({
-            message: assistantMessage.content,
-            messages: [userMessage, assistantMessage]
+            message: chatResponse.message
           });
 
         } catch (error: any) {
@@ -519,36 +503,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return res.status(403).json({ message: "Not authorized" });
           }
 
-          const [userMessage] = await db.insert(chats).values({
-            userId: req.user!.id,
-            projectId,
-            role: "user",
-            content: message.trim(),
-            timestamp: new Date(),
-          }).returning();
-
-          const aiResponse = await createChatCompletion({
+          const services = await createAIServices(req.user!.id);
+          const chatResponse = await services.chat.createChatCompletion({
             userId: req.user!.id,
             message: message.trim(),
             context: {
               transcription: project.transcription,
               summary: project.summary,
-              notes: project.notes,
+              projectId
             },
           });
 
-          const [assistantMessage] = await db.insert(chats).values({
-            userId: req.user!.id,
-            projectId,
-            role: "assistant",
-            content: aiResponse.message,
-            timestamp: new Date(),
-          }).returning();
+          if (chatResponse.error) {
+            throw new Error(chatResponse.error);
+          }
 
           res.json({
-            message: aiResponse.message,
-            messages: [userMessage, assistantMessage]
+            message: chatResponse.message
           });
+
         } catch (error: any) {
           console.error("Project chat error:", error);
           res.status(500).json({
@@ -556,7 +529,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
       });
-
     app.get(
       "/api/recordings/:filename/download",
       requireAuth,

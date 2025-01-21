@@ -5,8 +5,7 @@ import { db } from "@db";
 import { settings, chats } from "@db/schema";
 import { eq } from "drizzle-orm";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
-import { updateChatContext, createEmbedding } from '../embeddings';
-import { findRecommendedTasks } from '../embeddings';
+import { updateChatContext, createEmbedding, findRecommendedTasks } from './embeddings';
 
 export class ChatService {
   private client: OpenAI;
@@ -35,14 +34,13 @@ export class ChatService {
 
       const systemPrompt = userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT;
       const { enhancedContext, similarityScore } = await updateChatContext(userId, message);
-      
+
       const { recommendations: recommendedTasks } = await findRecommendedTasks(userId, message, {
         limit: 5,
         minSimilarity: 0.5,
         includeCompleted: false
       });
 
-      // Build the system message with context
       const systemMessage = `${systemPrompt}\n\n${context ? `Current Context:\n${JSON.stringify(context, null, 2)}\n\n` : ''}Relevant Context:\n${formatContextForPrompt(enhancedContext)}\n\nRecommended Tasks:\n${recommendedTasks.map(task => `- ${task.text}`).join('\n')}`;
 
       const response = await this.client.chat.completions.create({

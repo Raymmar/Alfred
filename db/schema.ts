@@ -4,6 +4,7 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 
+// Users table with explicit system_prompt
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").unique().notNull(),
@@ -75,15 +76,14 @@ export const chats = pgTable("chats", {
   timestamp: timestamp("timestamp").notNull().defaultNow(),
 });
 
-// Define a custom vector type for pgvector with explicit size parameter
-export const vector = (dimensions: number) => sql<string>`vector(${sql.raw(dimensions.toString())})`;
-
+// Define embeddings table without vector type for now
+// We'll need to add pgvector extension support separately
 export const embeddings = pgTable("embeddings", {
   id: serial("id").primaryKey(),
   contentType: text("content_type").notNull(),
   contentId: integer("content_id").notNull(),
   contentText: text("content_text").notNull(),
-  embedding: vector(384),
+  embedding: text("embedding").notNull(), // Store as JSON string temporarily
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

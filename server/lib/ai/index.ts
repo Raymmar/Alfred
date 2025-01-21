@@ -1,3 +1,9 @@
+import { TranscriptionService } from './transcription';
+import { InsightsService } from './insights';
+import { TaskExtractionService } from './tasks';
+import { ChatService } from './chat';
+import { EmbeddingsService } from './embeddings';
+
 export * from './types';
 export * from './utils';
 export * from './transcription';
@@ -12,18 +18,21 @@ export async function createAIServices(userId: number) {
     transcriptionService,
     insightsService,
     taskExtractionService,
-    chatService
+    chatService,
+    embeddingsService
   ] = await Promise.all([
     TranscriptionService.create(userId),
     InsightsService.create(userId),
     TaskExtractionService.create(userId),
-    ChatService.create(userId)
+    ChatService.create(userId),
+    EmbeddingsService.create(userId)
   ]);
 
   return {
     transcription: transcriptionService,
     insights: insightsService,
     tasks: taskExtractionService,
-    chat: chatService
+    chat: chatService,
+    embeddings: embeddingsService
   };
 }
