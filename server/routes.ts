@@ -17,7 +17,7 @@ import express from "express";
 import path, { join } from "path";
 import fs, { existsSync } from "fs";
 import { ensureStorageDirectory, getRecordingsPath, cleanupOrphanedRecordings, getAudioContentType, isValidAudioFile } from "./storage";
-import { createChatCompletion } from "./lib/openai";
+import { createAIServices } from "./lib/ai";
 import { RequestHandler } from "express-serve-static-core";
 import OpenAI from "openai";
 
@@ -432,9 +432,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
               timestamp: new Date(),
             }).returning();
 
-            const aiResponse = await createChatCompletion({
+            const services = await createAIServices(req.user!.id);
+            const aiResponse = await services.chat.generateResponse({
               userId: req.user!.id,
-              message: message.trim(),
+              message: message.trim()
             });
 
             const [assistantMsg] = await tx.insert(chats).values({
@@ -527,7 +528,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             timestamp: new Date(),
           }).returning();
 
-          const aiResponse = await createChatCompletion({
+          const services = await createAIServices(req.user!.id);
+          const aiResponse = await services.chat.generateResponse({
             userId: req.user!.id,
             message: message.trim(),
             context: {
