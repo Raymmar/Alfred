@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
+import { useSettings } from '@/hooks/use-settings';
 import { queryClient } from '@/lib/queryClient';
 import type { SelectProject } from '@db/schema';
 
@@ -12,15 +13,16 @@ interface UseSummaryProps {
 
 export function useSummary({ projectId }: UseSummaryProps) {
   const { toast } = useToast();
+  const { settings } = useSettings();
   const [content, setContent] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const saveTimeout = useRef<NodeJS.Timeout>();
 
   // Fetch project data with proper array queryKey typing
   const { data: project } = useQuery<SelectProject | undefined>({
-    queryKey: projectId ? ['projects', projectId] : ['projects'],
+    queryKey: projectId ? ['projects', projectId] : null,
     queryFn: async ({ queryKey }) => {
-      if (!projectId || queryKey.length < 2) {
+      if (!projectId || !Array.isArray(queryKey) || queryKey.length < 2) {
         return undefined;
       }
       const response = await fetch(`/api/projects/${projectId}`);
@@ -53,11 +55,15 @@ export function useSummary({ projectId }: UseSummaryProps) {
 
       // Ensure the content is properly formatted as HTML
       const formattedContent = content.trim();
+      const userPrompt = settings?.defaultPrompt;
 
       const response = await fetch(`/api/projects/${projectId}/summary`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ summary: formattedContent }),
+        body: JSON.stringify({ 
+          summary: formattedContent,
+          prompt: userPrompt // Send the user's custom prompt to the backend
+        }),
       });
 
       if (!response.ok) {

@@ -194,24 +194,23 @@ export async function createChatCompletion({
     apiKey,
   });
 
+  // Select the appropriate prompt based on the promptType and include content context
+  let promptToUse = promptType === 'todo'
+    ? todoPrompt
+    : promptType === 'primary'
+      ? primaryPrompt
+      : systemPrompt;
+
+  // If we have note content and this is a primary/summary prompt, include it
+  if (promptType === 'primary' && context?.summary) {
+    promptToUse = `${promptToUse}\n\nExisting Summary Content:\n${context.summary}`;
+  }
+
   const userData = await getContextData(userId);
   const { enhancedContext, similarityScore } = await updateChatContext(userId, message);
 
-  const { recommendations: recommendedTasks } = await findRecommendedTasks(userId, message, {
-    limit: 5,
-    minSimilarity: 0.5,
-    includeCompleted: false
-  });
-
-  // Select the appropriate prompt based on the promptType
-  const basePrompt = promptType === 'todo'
-    ? (userSettings?.todoPrompt || DEFAULT_TODO_PROMPT)
-    : promptType === 'primary'
-      ? (userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT)
-      : (userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT);
-
   // Build system message with enhanced contextual awareness and selected prompt
-  let systemMessage = `${basePrompt}\n\nDatabase Context:
+  let systemMessage = `${promptToUse}\n\nDatabase Context:
 Total Projects: ${userData.totalProjects}
 Total Recordings: ${userData.totalRecordings}
 Total Tasks: ${userData.totalTodos} (${userData.totalCompletedTodos} completed)
