@@ -74,26 +74,45 @@ function isDuplicateTask(newTask: string, existingTasks: Array<{ text: string }>
 
 async function processAudio(projectId: number): Promise<RequestResult<SelectProject>> {
   try {
-    console.log('Starting audio processing for project:', projectId);
-
     const response = await fetch(`/api/projects/${projectId}/process`, {
       method: 'POST',
       credentials: 'include',
     });
 
     const data = await response.json();
-    console.log('Audio processing response:', {
-      status: response.status,
-      ok: response.ok,
-      data: data
-    });
 
     if (!response.ok) {
-      console.error('Processing failed:', data);
       return { 
         ok: false, 
         message: data.message || response.statusText 
       };
+    }
+
+    // Additional validation of tasks in the response
+    if (data.todos) {
+      // Get existing tasks for duplicate check
+      const existingTasksResponse = await fetch(`/api/projects/${projectId}/todos`);
+      const existingTasks = await existingTasksResponse.json();
+
+      // Filter out empty and duplicate tasks
+      data.todos = data.todos.filter((todo: any) => {
+        if (!todo || typeof todo.text !== 'string') {
+          console.log('Frontend filtering: Removed invalid task:', todo);
+          return false;
+        }
+
+        if (isEmptyTaskResponse(todo.text)) {
+          console.log('Frontend filtering: Removed empty task response:', todo.text);
+          return false;
+        }
+
+        if (isDuplicateTask(todo.text, existingTasks)) {
+          console.log('Frontend filtering: Removed duplicate task:', todo.text);
+          return false;
+        }
+
+        return true;
+      });
     }
 
     return { ok: true, data };

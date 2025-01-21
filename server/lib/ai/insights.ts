@@ -16,26 +16,12 @@ export class InsightsService {
   }
 
   static async create(userId: number): Promise<InsightsService> {
-    try {
-      console.log('Creating InsightsService for user:', userId);
-      const config = await getAIServiceConfig(userId);
-      console.log('Got AI service config:', { 
-        hasApiKey: !!config.apiKey,
-        model: config.model
-      });
-      return new InsightsService(config);
-    } catch (error) {
-      console.error('Failed to create InsightsService:', error);
-      throw error;
-    }
+    const config = await getAIServiceConfig(userId);
+    return new InsightsService(config);
   }
 
   async generateInsights(transcription: string, userId: number): Promise<InsightGenerationResult> {
     try {
-      if (!transcription || typeof transcription !== 'string' || transcription.trim().length === 0) {
-        throw new Error('Invalid or empty transcription provided');
-      }
-
       // Get user's custom prompt or use default
       const userSettings = await db.query.settings.findFirst({
         where: eq(settings.userId, userId),
@@ -43,16 +29,8 @@ export class InsightsService {
 
       const prompt = userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT;
 
-      console.log('Generating insights with config:', {
-        model: this.config.model,
-        temperature: this.config.temperature,
-        maxTokens: this.config.maxTokens,
-        transcriptionLength: transcription.length,
-        promptLength: prompt.length
-      });
-
       const response = await this.client.chat.completions.create({
-        model: "gpt-4o",
+        model: this.config.model || "gpt-4o",
         messages: [
           { 
             role: "system", 
@@ -64,14 +42,10 @@ export class InsightsService {
           }
         ],
         temperature: this.config.temperature || 0.7,
-        max_tokens: this.config.maxTokens || 1000,
+        max_tokens: this.config.maxTokens || 500,
       });
 
-      if (!response.choices?.[0]?.message?.content) {
-        throw new Error('No response content from OpenAI');
-      }
-
-      const summary = response.choices[0].message.content;
+      const summary = response.choices[0].message.content || "";
       const formattedSummary = convertMarkdownToHTML(summary);
 
       return {
@@ -82,20 +56,9 @@ export class InsightsService {
 
     } catch (error: any) {
       console.error('Insight generation error:', error);
-      const errorMessage = error.message || 'Failed to generate insights';
-      console.error('Full error details:', {
-        message: errorMessage,
-        code: error.code,
-        type: error.type,
-        param: error.param,
-        transcriptionProvided: !!transcription
-      });
-
       return {
         summary: "",
-        error: errorMessage,
-        keyPoints: [],
-        topics: []
+        error: error.message || 'Failed to generate insights'
       };
     }
   }

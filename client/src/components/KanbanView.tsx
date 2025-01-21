@@ -110,11 +110,12 @@ export function KanbanView({ columns, todos }: KanbanViewProps) {
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-
+    
     if (over && active.id !== over.id) {
-      const activeColumnId = active.data.current?.column_id;
-      const overColumnId = over.data.current?.column_id;
-
+      // Handle movement between columns
+      const activeColumnId = active.data.current?.columnId;
+      const overColumnId = over.data.current?.columnId;
+      
       if (activeColumnId !== overColumnId) {
         const todoId = parseInt(active.id as string);
         try {
@@ -127,7 +128,7 @@ export function KanbanView({ columns, todos }: KanbanViewProps) {
         }
       }
     }
-
+    
     setActiveId(null);
   };
 
@@ -144,7 +145,7 @@ export function KanbanView({ columns, todos }: KanbanViewProps) {
             <KanbanColumn
               key={column.id}
               column={column}
-              todos={todos.filter((todo) => todo.column_id === column.id)}
+              todos={todos.filter((todo) => todo.columnId === column.id)}
             />
           ))}
           <DragOverlay>
@@ -155,7 +156,7 @@ export function KanbanView({ columns, todos }: KanbanViewProps) {
             ) : null}
           </DragOverlay>
         </DndContext>
-
+        
         <Card className="w-80 shrink-0">
           <CardContent className="p-4">
             <Button variant="ghost" className="w-full">

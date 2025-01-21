@@ -11,7 +11,7 @@ export function useKanban() {
     error: columnsError,
     isLoading: isLoadingColumns,
   } = useQuery<SelectKanbanColumn[]>({
-    queryKey: ['/api/kanban/columns'],
+    queryKey: ['kanban', 'columns'],
     staleTime: 0,
     refetchOnWindowFocus: true
   });
@@ -20,18 +20,19 @@ export function useKanban() {
     data: todos = [],
     error: todosError,
     isLoading: isLoadingTodos,
-  } = useQuery<SelectTodo[]>({
-    queryKey: ['/api/todos'],
-    staleTime: 0,
+  } = useQuery<(SelectTodo & { project: { title: string, createdAt: string } })[]>({
+    queryKey: ['todos'],
+    staleTime: 0, // Always fetch fresh data
     refetchOnWindowFocus: true,
-    refetchOnMount: true,
+    refetchOnMount: true, // Always refetch when component mounts
     select: (data) => data.map(todo => ({
       ...todo,
-      order: todo.order ?? todo.id
+      order: todo.order ?? todo.id // Ensure stable order using ID as fallback
     })),
+    refetchInterval: 1000 // Poll every second to ensure we catch updates
   });
 
-  // Update mutation with improved error handling
+  // Update mutation with improved cache handling and type safety
   const updateTodoMutation = useMutation({
     mutationFn: async ({ 
       todoId, 
@@ -47,11 +48,7 @@ export function useKanban() {
       const response = await fetch(`/api/todos/${todoId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          column_id: columnId, 
-          completed, 
-          order 
-        }),
+        body: JSON.stringify({ columnId, completed, order }),
       });
 
       if (!response.ok) {
@@ -61,21 +58,24 @@ export function useKanban() {
       return response.json();
     },
     onMutate: async ({ todoId, columnId, completed, order }) => {
-      await queryClient.cancelQueries({ queryKey: ['/api/todos'] });
-      await queryClient.cancelQueries({ queryKey: ['/api/kanban/columns'] });
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['todos'] });
+      await queryClient.cancelQueries({ queryKey: ['kanban', 'columns'] });
 
-      const previousTodos = queryClient.getQueryData<SelectTodo[]>(['/api/todos']);
-      const previousColumns = queryClient.getQueryData<SelectKanbanColumn[]>(['/api/kanban/columns']);
+      // Snapshot the previous values
+      const previousTodos = queryClient.getQueryData<SelectTodo[]>(['todos']);
+      const previousColumns = queryClient.getQueryData<SelectKanbanColumn[]>(['kanban', 'columns']);
 
-      queryClient.setQueryData<SelectTodo[]>(['/api/todos'], (old = []) => 
+      // Optimistically update todos cache with proper type handling
+      queryClient.setQueryData<SelectTodo[]>(['todos'], (old = []) => 
         old.map(todo => 
           todo.id === todoId
             ? {
                 ...todo,
-                column_id: columnId ?? todo.column_id,
-                completed: completed ?? todo.completed,
-                order: order ?? todo.order,
-                updated_at: new Date()
+                ...(columnId !== undefined && { columnId }),
+                ...(completed !== undefined && { completed }),
+                ...(order !== undefined && { order }),
+                updatedAt: new Date()
               }
             : todo
         )
@@ -84,11 +84,12 @@ export function useKanban() {
       return { previousTodos, previousColumns };
     },
     onError: (error, variables, context) => {
+      // Revert to previous state on error
       if (context?.previousTodos) {
-        queryClient.setQueryData(['/api/todos'], context.previousTodos);
+        queryClient.setQueryData(['todos'], context.previousTodos);
       }
       if (context?.previousColumns) {
-        queryClient.setQueryData(['/api/kanban/columns'], context.previousColumns);
+        queryClient.setQueryData(['kanban', 'columns'], context.previousColumns);
       }
       toast({
         title: "Error",
@@ -97,8 +98,9 @@ export function useKanban() {
       });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/todos'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/kanban/columns'] });
+      // Always refetch to ensure consistency
+      queryClient.invalidateQueries({ queryKey: ['todos'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban', 'columns'] });
     },
   });
 
