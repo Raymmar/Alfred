@@ -3,7 +3,7 @@ import { existsSync, promises as fs } from 'fs';
 import { join } from 'path';
 import { db } from '@db';
 import { projects } from '@db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 
 const VALID_EXTENSIONS = ['.webm', '.mp3', '.wav', '.ogg'];
 const DEFAULT_PERMISSIONS = 0o666; // rw-rw-rw-
@@ -80,7 +80,7 @@ export async function isValidAudioFile(filename: string, userId: number): Promis
       return [false, 'Invalid file extension'];
     }
 
-    const filePath = join(getRecordingsPath(userId), filename);
+    const filePath = join(getRecordingsPath(), filename);
 
     // Check if file exists
     if (!existsSync(filePath)) {
