@@ -1,7 +1,6 @@
 import { pgTable, text, serial, timestamp, integer, boolean } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
-import { sql } from "drizzle-orm";
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 
 // Users table with explicit system_prompt
@@ -13,7 +12,6 @@ export const users = pgTable("users", {
   defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
   todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
   systemPrompt: text("system_prompt").default(DEFAULT_SYSTEM_PROMPT),
-  storageLocation: text("storage_location"),
 });
 
 export const settings = pgTable("settings", {
@@ -27,7 +25,7 @@ export const settings = pgTable("settings", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Projects table with proper relations
+// Projects table 
 export const projects = pgTable("projects", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -48,7 +46,7 @@ export const notes = pgTable("notes", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Updated kanban columns with proper user relation
+// Kanban columns
 export const kanbanColumns = pgTable("kanban_columns", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -58,7 +56,7 @@ export const kanbanColumns = pgTable("kanban_columns", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Updated todos with proper relations
+// Todos with explicit relations
 export const todos = pgTable("todos", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -71,7 +69,7 @@ export const todos = pgTable("todos", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Updated chats table with proper cascade
+// Chats table
 export const chats = pgTable("chats", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -90,13 +88,13 @@ export const embeddings = pgTable("embeddings", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
-// Update relations to include proper references
-
+// Relations
 export const userRelations = relations(users, ({ many }) => ({
   projects: many(projects),
   todos: many(todos),
   kanbanColumns: many(kanbanColumns),
   chats: many(chats),
+  settings: many(settings),
 }));
 
 export const settingsRelations = relations(settings, ({ one }) => ({
@@ -106,26 +104,17 @@ export const settingsRelations = relations(settings, ({ one }) => ({
   }),
 }));
 
-export const projectsRelations = relations(projects, ({ one, many }) => ({
+export const projectRelations = relations(projects, ({ one, many }) => ({
   user: one(users, {
     fields: [projects.userId],
     references: [users.id],
   }),
   todos: many(todos),
-  note: one(notes, {
-    fields: [projects.id],
-    references: [notes.projectId],
-  }),
+  notes: many(notes),
+  chats: many(chats),
 }));
 
-export const notesRelations = relations(notes, ({ one }) => ({
-  project: one(projects, {
-    fields: [notes.projectId],
-    references: [projects.id],
-  }),
-}));
-
-export const todosRelations = relations(todos, ({ one }) => ({
+export const todoRelations = relations(todos, ({ one }) => ({
   user: one(users, {
     fields: [todos.userId],
     references: [users.id],
@@ -140,12 +129,12 @@ export const todosRelations = relations(todos, ({ one }) => ({
   }),
 }));
 
-export const kanbanColumnsRelations = relations(kanbanColumns, ({ many, one }) => ({
-  todos: many(todos),
+export const kanbanColumnRelations = relations(kanbanColumns, ({ one, many }) => ({
   user: one(users, {
     fields: [kanbanColumns.userId],
     references: [users.id],
   }),
+  todos: many(todos),
 }));
 
 export const chatRelations = relations(chats, ({ one }) => ({
@@ -155,6 +144,13 @@ export const chatRelations = relations(chats, ({ one }) => ({
   }),
   project: one(projects, {
     fields: [chats.projectId],
+    references: [projects.id],
+  }),
+}));
+
+export const notesRelations = relations(notes, ({ one }) => ({
+  project: one(projects, {
+    fields: [notes.projectId],
     references: [projects.id],
   }),
 }));
@@ -177,6 +173,8 @@ export const embeddingsRelations = relations(embeddings, ({ one }) => ({
   }),
 }));
 
+
+// Export schemas
 export const insertUserSchema = createInsertSchema(users);
 export const selectUserSchema = createSelectSchema(users);
 export type InsertUser = typeof users.$inferInsert;
