@@ -1230,8 +1230,10 @@ Format Rules:
 
         const title = titleResponse.choices[0].message.content.trim();
 
-        // Use createChatCompletion for insights with consolidated prompts
-        const summaryResponse = await createChatCompletion({
+        // Use AI services for insights and tasks
+        const chatService = await createChatService(req.user!.id);
+        
+        const summaryResponse = await chatService.createChatCompletion({
           userId: req.user!.id,
           message: formattedTranscript,
           context: {
@@ -1243,8 +1245,7 @@ Format Rules:
 
         const summary = summaryResponse.message.trim();
 
-        // Use createChatCompletion for tasks with consolidated prompts
-        const taskResponse = await createChatCompletion({
+        const taskResponse = await chatService.createChatCompletion({
           userId: req.user!.id,
           message: formattedTranscript,
           context: {
