@@ -3,7 +3,7 @@ import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 
-// Users table with explicit system_prompt
+// Users table with settings
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").unique().notNull(),
@@ -12,6 +12,8 @@ export const users = pgTable("users", {
   defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
   todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
   systemPrompt: text("system_prompt").default(DEFAULT_SYSTEM_PROMPT),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 export const settings = pgTable("settings", {
@@ -38,7 +40,7 @@ export const projects = pgTable("projects", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Notes table with proper project reference
+// Notes table
 export const notes = pgTable("notes", {
   id: serial("id").primaryKey(),
   projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
@@ -47,7 +49,7 @@ export const notes = pgTable("notes", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Kanban columns with user reference
+// Kanban columns
 export const kanbanColumns = pgTable("kanban_columns", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -57,7 +59,7 @@ export const kanbanColumns = pgTable("kanban_columns", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Todos with explicit relations
+// Todos
 export const todos = pgTable("todos", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -70,7 +72,7 @@ export const todos = pgTable("todos", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Chats table with project reference
+// Chats
 export const chats = pgTable("chats", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -78,16 +80,6 @@ export const chats = pgTable("chats", {
   role: text("role").notNull(),
   content: text("content").notNull(),
   timestamp: timestamp("timestamp").notNull().defaultNow(),
-});
-
-// Embeddings table for semantic search
-export const embeddings = pgTable("embeddings", {
-  id: serial("id").primaryKey(),
-  contentType: text("content_type").notNull(),
-  contentId: integer("content_id").notNull(),
-  contentText: text("content_text").notNull(),
-  embedding: text("embedding").notNull(),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
 // Define relations
@@ -192,8 +184,3 @@ export const insertChatSchema = createInsertSchema(chats);
 export const selectChatSchema = createSelectSchema(chats);
 export type InsertChat = typeof chats.$inferInsert;
 export type SelectChat = typeof chats.$inferSelect;
-
-export const insertEmbeddingSchema = createInsertSchema(embeddings);
-export const selectEmbeddingSchema = createSelectSchema(embeddings);
-export type InsertEmbedding = typeof embeddings.$inferInsert;
-export type SelectEmbedding = typeof embeddings.$inferSelect;

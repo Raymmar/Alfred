@@ -1,9 +1,12 @@
 import { OpenAI } from 'openai';
 import { db } from "@db";
 import { eq, desc } from "drizzle-orm";
-import { chats, todos, projects, embeddings } from "@db/schema";
+import { chats, todos, projects } from "@db/schema";
 import { getAIServiceConfig, createOpenAIClient } from './utils';
 import type { AIServiceConfig } from './types';
+
+// In-memory cache for embeddings (temporary solution)
+const embeddingsCache = new Map<string, number[]>();
 
 export class EmbeddingsService {
   private client: OpenAI;
@@ -15,12 +18,24 @@ export class EmbeddingsService {
   }
 
   static async create(userId: number): Promise<EmbeddingsService> {
-    const config = await getAIServiceConfig(userId);
-    return new EmbeddingsService(config);
+    try {
+      console.log('Creating EmbeddingsService for user:', userId);
+      const config = await getAIServiceConfig(userId);
+      console.log('Got AI service config:', { 
+        hasApiKey: !!config.apiKey,
+        model: config.model
+      });
+      return new EmbeddingsService(config);
+    } catch (error) {
+      console.error('Failed to create EmbeddingsService:', error);
+      throw error;
+    }
   }
 
   async createEmbedding(input: string) {
     try {
+      console.log('Creating embedding for input length:', input.length);
+
       const embeddingResponse = await this.client.embeddings.create({
         model: "text-embedding-ada-002",
         input: input.replace(/\n/g, " "),
@@ -36,13 +51,9 @@ export class EmbeddingsService {
 
   async storeEmbedding(contentType: string, contentId: number, contentText: string, embedding: number[]) {
     try {
-      await db.insert(embeddings).values({
-        contentType,
-        contentId,
-        contentText,
-        embedding: JSON.stringify(embedding), // Store as JSON string
-        createdAt: new Date(),
-      });
+      const key = `${contentType}:${contentId}`;
+      embeddingsCache.set(key, embedding);
+      console.log('Stored embedding in cache:', key);
     } catch (error) {
       console.error('Error storing embedding:', error);
       throw error;
@@ -51,6 +62,8 @@ export class EmbeddingsService {
 
   async updateChatContext(userId: number, message: string) {
     try {
+      console.log('Updating chat context for user:', userId);
+
       // Create embedding for the new message
       const messageEmbedding = await this.createEmbedding(message);
 
@@ -61,8 +74,9 @@ export class EmbeddingsService {
         limit: 10
       });
 
+      console.log('Found recent chats:', recentChats.length);
+
       // For now, return basic context without vector similarity
-      // This could be enhanced with actual vector similarity search
       const enhancedContext = recentChats.map(chat => ({
         type: 'chat',
         text: chat.content,
@@ -98,6 +112,8 @@ export class EmbeddingsService {
     } = options;
 
     try {
+      console.log('Finding recommended tasks for user:', userId);
+
       const contentEmbedding = await this.createEmbedding(content);
 
       // Get user's todos
@@ -105,8 +121,9 @@ export class EmbeddingsService {
         where: eq(todos.userId, userId),
       });
 
+      console.log('Found user todos:', userTodos.length);
+
       // For now, return basic recommendations
-      // This could be enhanced with actual vector similarity comparison
       const recommendations = userTodos
         .filter(todo => includeCompleted || !todo.completed)
         .slice(0, limit)

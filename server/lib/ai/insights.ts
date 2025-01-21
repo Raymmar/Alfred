@@ -16,8 +16,18 @@ export class InsightsService {
   }
 
   static async create(userId: number): Promise<InsightsService> {
-    const config = await getAIServiceConfig(userId);
-    return new InsightsService(config);
+    try {
+      console.log('Creating InsightsService for user:', userId);
+      const config = await getAIServiceConfig(userId);
+      console.log('Got AI service config:', { 
+        hasApiKey: !!config.apiKey,
+        model: config.model
+      });
+      return new InsightsService(config);
+    } catch (error) {
+      console.error('Failed to create InsightsService:', error);
+      throw error;
+    }
   }
 
   async generateInsights(transcription: string, userId: number): Promise<InsightGenerationResult> {
@@ -42,7 +52,7 @@ export class InsightsService {
       });
 
       const response = await this.client.chat.completions.create({
-        model: this.config.model || "gpt-4o",
+        model: "gpt-4o",
         messages: [
           { 
             role: "system", 

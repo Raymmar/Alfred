@@ -15,16 +15,19 @@ export function convertMarkdownToHTML(markdown: string): string {
   if (!markdown) return '';
 
   try {
-    const html = marked(markdown);
-    return html
-      .replace(/\sstyle="[^"]*"/g, '')
-      .replace(/\sclass="[^"]*"/g, '')
-      .replace(/<p>\s*<\/p>/g, '')
-      .replace(/\sdata-[^=]*="[^"]*"/g, '')
-      .replace(/(\r?\n){3,}/g, '\n\n')
-      .replace(/<\/li><li>/g, '</li>\n<li>')
-      .replace(/<\/h([1-6])><h([1-6])>/g, '</h$1>\n<h$2>')
-      .trim();
+    const html = marked.parse(markdown);
+    if (typeof html === 'string') {
+      return html
+        .replace(/\sstyle="[^"]*"/g, '')
+        .replace(/\sclass="[^"]*"/g, '')
+        .replace(/<p>\s*<\/p>/g, '')
+        .replace(/\sdata-[^=]*="[^"]*"/g, '')
+        .replace(/(\r?\n){3,}/g, '\n\n')
+        .replace(/<\/li><li>/g, '</li>\n<li>')
+        .replace(/<\/h([1-6])><h([1-6])>/g, '</h$1>\n<h$2>')
+        .trim();
+    }
+    return String(html);
   } catch (error) {
     console.error('Error converting markdown to HTML:', error);
     return `<p>${markdown}</p>`;
@@ -58,6 +61,7 @@ export async function getAIServiceConfig(userId: number): Promise<AIServiceConfi
       hasSettingsApiKey: !!userSettings?.openAiKey 
     });
 
+    // Prefer settings API key over user API key
     const apiKey = userSettings?.openAiKey || user.openaiApiKey;
 
     if (!apiKey) {
@@ -67,7 +71,7 @@ export async function getAIServiceConfig(userId: number): Promise<AIServiceConfi
 
     const config = {
       apiKey,
-      model: "gpt-4o", // Latest model as of May 13, 2024
+      model: "gpt-4o",
       temperature: 0.7,
       maxTokens: 1000,
     };
