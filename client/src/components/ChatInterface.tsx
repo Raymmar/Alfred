@@ -44,8 +44,8 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
   const { data: messages = [] } = useQuery<Message[]>({
     queryKey: messagesQueryKey,
     enabled: !!user?.id, // Only enable query when user is authenticated
-    staleTime: 0, // Always fetch fresh data
-    gcTime: 0, // Don't keep old data in cache
+    staleTime: 5 * 60 * 1000, // Consider data fresh for 5 minutes
+    gcTime: 10 * 60 * 1000, // Keep unused data in cache for 10 minutes
     retry: false,
     refetchOnWindowFocus: true,
     refetchOnMount: true,
