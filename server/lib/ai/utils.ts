@@ -33,33 +33,42 @@ export function convertMarkdownToHTML(markdown: string): string {
 }
 
 export async function getAIServiceConfig(userId: number): Promise<AIServiceConfig> {
-  const user = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-  });
+  try {
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+    });
 
-  if (!user) {
-    throw new Error("User not found");
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const userSettings = await db.query.settings.findFirst({
+      where: eq(settings.userId, userId),
+    });
+
+    const apiKey = userSettings?.openAiKey || user.openaiApiKey;
+
+    if (!apiKey) {
+      throw new Error("OpenAI API key not found. Please add your API key in settings.");
+    }
+
+    return {
+      apiKey,
+      model: "gpt-4o", // Latest model as of May 13, 2024
+      temperature: 0.7,
+      maxTokens: 1000,
+    };
+  } catch (error) {
+    console.error('Error getting AI service config:', error);
+    throw error;
   }
-
-  const userSettings = await db.query.settings.findFirst({
-    where: eq(settings.userId, userId),
-  });
-
-  const apiKey = userSettings?.openAiKey || user.openaiApiKey;
-
-  if (!apiKey) {
-    throw new Error("OpenAI API key not found. Please add your API key in settings.");
-  }
-
-  return {
-    apiKey,
-    model: "gpt-4o", // Latest model as of May 13, 2024
-    temperature: 0.7,
-    maxTokens: 500,
-  };
 }
 
 export function createOpenAIClient(config: AIServiceConfig): OpenAI {
+  if (!config.apiKey) {
+    throw new Error("OpenAI API key is required");
+  }
+
   return new OpenAI({
     apiKey: config.apiKey,
   });

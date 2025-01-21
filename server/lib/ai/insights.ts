@@ -22,12 +22,24 @@ export class InsightsService {
 
   async generateInsights(transcription: string, userId: number): Promise<InsightGenerationResult> {
     try {
+      if (!transcription || typeof transcription !== 'string' || transcription.trim().length === 0) {
+        throw new Error('Invalid or empty transcription provided');
+      }
+
       // Get user's custom prompt or use default
       const userSettings = await db.query.settings.findFirst({
         where: eq(settings.userId, userId),
       });
 
       const prompt = userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT;
+
+      console.log('Generating insights with config:', {
+        model: this.config.model,
+        temperature: this.config.temperature,
+        maxTokens: this.config.maxTokens,
+        transcriptionLength: transcription.length,
+        promptLength: prompt.length
+      });
 
       const response = await this.client.chat.completions.create({
         model: this.config.model || "gpt-4o",
@@ -42,10 +54,14 @@ export class InsightsService {
           }
         ],
         temperature: this.config.temperature || 0.7,
-        max_tokens: this.config.maxTokens || 500,
+        max_tokens: this.config.maxTokens || 1000,
       });
 
-      const summary = response.choices[0].message.content || "";
+      if (!response.choices?.[0]?.message?.content) {
+        throw new Error('No response content from OpenAI');
+      }
+
+      const summary = response.choices[0].message.content;
       const formattedSummary = convertMarkdownToHTML(summary);
 
       return {
@@ -56,9 +72,20 @@ export class InsightsService {
 
     } catch (error: any) {
       console.error('Insight generation error:', error);
+      const errorMessage = error.message || 'Failed to generate insights';
+      console.error('Full error details:', {
+        message: errorMessage,
+        code: error.code,
+        type: error.type,
+        param: error.param,
+        transcriptionProvided: !!transcription
+      });
+
       return {
         summary: "",
-        error: error.message || 'Failed to generate insights'
+        error: errorMessage,
+        keyPoints: [],
+        topics: []
       };
     }
   }
