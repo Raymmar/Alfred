@@ -205,10 +205,10 @@ export async function createChatCompletion({
   });
 
   // Select the appropriate prompt based on the promptType
-  const basePrompt = promptType === 'todo'
-    ? todoPrompt
+  const basePrompt = promptType === 'todo' 
+    ? todoPrompt 
     : promptType === 'primary'
-      ? primaryPrompt
+      ? primaryPrompt 
       : systemPrompt;
 
   // Build system message with enhanced contextual awareness and selected prompt
@@ -282,22 +282,8 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
     const assistantResponse = response.choices[0].message.content || "";
     console.log('GPT response:', assistantResponse);
 
-    // Set content type based on promptType
-    const contentType = (() => {
-      switch (promptType) {
-        case 'todo':
-          return 'task';
-        case 'primary':
-          return 'insight';
-        case 'system':
-          return 'chat';
-        default:
-          return 'chat';
-      }
-    })();
-
-    // Only convert to HTML if it's not a task
-    const finalResponse = contentType === 'task'
+    // Only convert to HTML if it's not a todo prompt
+    const finalResponse = promptType === 'todo'
       ? assistantResponse  // Keep tasks as plain text
       : convertMarkdownToHTML(assistantResponse); // Convert insights to HTML
 
@@ -308,7 +294,6 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
         userId,
         role: "user",
         content: message,
-        contentType: 'chat',  // User messages are always chat type
         projectId: context?.projectId || null,
         timestamp: new Date(),
       }).returning();
@@ -317,7 +302,6 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
         userId,
         role: "assistant",
         content: finalResponse,
-        contentType, // Use the determined content type
         projectId: context?.projectId || null,
         timestamp: new Date(),
       }).returning();

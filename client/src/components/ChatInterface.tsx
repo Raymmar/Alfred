@@ -14,7 +14,6 @@ interface Message {
   content: string;
   timestamp: number | string | Date;
   userId?: number;
-  contentType?: "chat" | "insight" | "transcript" | "task";
 }
 
 export interface ChatInterfaceProps {
@@ -70,16 +69,7 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
         projectId
       });
 
-      // Strictly filter only chat messages
-      return data.filter((msg: Message) => {
-        // If contentType is explicitly set, only show chat messages
-        if (msg.contentType) {
-          return msg.contentType === 'chat';
-        }
-        // For backward compatibility, if no contentType is set, check if it's a regular chat message
-        // This can be removed once all messages have contentType
-        return msg.role === 'user' || (msg.role === 'assistant' && !msg.content.includes('```task') && !msg.content.includes('```transcript') && !msg.content.includes('```insight'));
-      });
+      return data;
     },
     enabled: !!user,
     staleTime: Infinity,
@@ -127,11 +117,9 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
         role: "user" as const,
         content: currentInput,
         timestamp,
-        userId: user?.id,
-        contentType: "chat" as const
+        userId: user?.id
       };
 
-      // Only add the user message if it's a chat message
       queryClient.setQueryData<Message[]>(messagesQueryKey, (old = []) => [
         ...old,
         newUserMessage
@@ -162,11 +150,7 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
       if (data.messages?.length === 2) {
         queryClient.setQueryData<Message[]>(messagesQueryKey, (old = []) => {
           const filtered = old.filter(msg => msg.timestamp !== timestamp);
-          // Only add messages with chat contentType to the chat feed
-          const chatMessages = data.messages.filter((msg: Message) => 
-            msg.contentType === 'chat' || (!msg.contentType && msg.role === 'user')
-          );
-          return [...filtered, ...chatMessages];
+          return [...filtered, ...data.messages];
         });
       }
 
