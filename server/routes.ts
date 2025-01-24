@@ -1,8 +1,8 @@
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import { projects, todos, notes, chats, kanbanColumns } from "@db/schema";
+import { projects, todos, notes, chats, kanbanColumns, users, settings } from "@db/schema";
 import { desc, eq, and, asc, or } from "drizzle-orm";
 import formidable from "formidable";
 import { spawn } from "child_process";
@@ -1013,26 +1013,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       requireAuth,
       async (req: AuthRequest, res: Response) => {
         try {
-          const { title, description, recordingUrl, initialNoteContent } =
-            req.body;
-          const [project] = awaitdb.transaction(async (tx) => {
+          const { title, description, recordingUrl, initialNoteContent } = req.body;
+          const [project] = await db.transaction(async (tx) => {
             const [newProject] = await tx
               .insert(projects)
-              .values({
-                title,
-                description,
-                recordingUrl,
-                userId: req.user!.id,
-              })
-              .returning();
-            await tx.insert(notes).values({
-              projectId: newProject.id,
-              content: initialNoteContent || "",
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            });
+                .values({
+                  userId: req.user!.id,
+                  title: title || "Untitled Project",
+                  description: description || "",
+                  recordingUrl,
+                  createdAt: new Date(),
+                  updatedAt: new Date(),
+                })
+                .returning();
+
+            if (initialNoteContent) {
+              await tx.insert(notes).values({
+                projectId: newProject.id,
+                content: initialNoteContent,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              });
+            }
+
             return [newProject];
           });
+
           res.json(project);
         } catch (error: any) {
           console.error("Error creating project:", error);

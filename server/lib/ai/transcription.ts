@@ -3,7 +3,7 @@ import { createReadStream } from "fs";
 
 export interface TranscriptionResult {
   text: string;
-  duration?: number;
+  duration: number;
 }
 
 export async function transcribeAudio(
@@ -23,10 +23,11 @@ export async function transcribeAudio(
 
     return {
       text: transcription.text,
-      duration: transcription.duration,
+      duration: transcription.duration || 0,
     };
   } catch (error) {
     handleAIError(error);
+    throw error; // Add explicit throw to satisfy TypeScript
   }
 }
 
