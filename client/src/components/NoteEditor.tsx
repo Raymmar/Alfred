@@ -48,6 +48,7 @@ import BulletList from "@tiptap/extension-bullet-list";
 import OrderedList from "@tiptap/extension-ordered-list";
 import { common, createLowlight } from "lowlight";
 import { useSummary } from "@/hooks/use-summary";
+import { useSettings } from "@/hooks/use-settings";
 
 const lowlight = createLowlight(common);
 
@@ -213,6 +214,7 @@ export function NoteEditor({
 }: NoteEditorProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { settings } = useSettings();
 
   // Fetch project data first
   const { data: project } = useQuery<SelectProject>({
@@ -240,8 +242,11 @@ export function NoteEditor({
     content: summaryContent,
     setContent: setSummaryContent,
     isSaving: isSavingSummary,
+    generateInsights,
   } = useSummary({
     projectId,
+    noteContent: content, // Pass the current note content to ensure insights are based on it
+    defaultPrompt: settings?.defaultPrompt, // Pass user's default prompt if available
   });
 
   const baseExtensions = [
@@ -463,7 +468,35 @@ export function NoteEditor({
                   <div className="flex-1 min-h-0 overflow-auto">
                     <div className="h-full relative">
                       {summaryEditor && (
-                        <EditorToolbar editor={summaryEditor} />
+                        <>
+                          <EditorToolbar editor={summaryEditor} />
+                          <div className="px-4 py-2 border-b">
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                if (content) {
+                                  generateInsights(content);
+                                } else {
+                                  toast({
+                                    title: "No Note Content",
+                                    description: "Please add some notes before generating insights.",
+                                    variant: "destructive",
+                                  });
+                                }
+                              }}
+                              disabled={isSavingSummary || !content}
+                            >
+                              {isSavingSummary ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  Generating Insights...
+                                </>
+                              ) : (
+                                "Regenerate Insights"
+                              )}
+                            </Button>
+                          </div>
+                        </>
                       )}
                       <div className="h-full [&_.ProseMirror]:h-full [&_.ProseMirror]:p-4 [&_.ProseMirror]:text-lg [&_.ProseMirror]:leading-relaxed [&_.ProseMirror]:font-sans [&_.ProseMirror]:focus:outline-none [&_.ProseMirror]:min-h-[200px] [&_.ProseMirror_ul]:leading-[120%] [&_.ProseMirror_ol]:leading-[120%] [&_.ProseMirror_ul]:my-2 [&_.ProseMirror_ol]:my-2">
                         <EditorContent
