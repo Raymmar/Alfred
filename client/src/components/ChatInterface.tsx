@@ -70,12 +70,15 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
         projectId
       });
 
-      // Filter out non-chat content
+      // Strictly filter only chat messages
       return data.filter((msg: Message) => {
-        // If no contentType is specified, treat it as chat content
-        if (!msg.contentType) return true;
-        // Only show messages with contentType 'chat'
-        return msg.contentType === 'chat';
+        // If contentType is explicitly set, only show chat messages
+        if (msg.contentType) {
+          return msg.contentType === 'chat';
+        }
+        // For backward compatibility, if no contentType is set, check if it's a regular chat message
+        // This can be removed once all messages have contentType
+        return msg.role === 'user' || (msg.role === 'assistant' && !msg.content.includes('```task') && !msg.content.includes('```transcript') && !msg.content.includes('```insight'));
       });
     },
     enabled: !!user,
@@ -128,6 +131,7 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
         contentType: "chat" as const
       };
 
+      // Only add the user message if it's a chat message
       queryClient.setQueryData<Message[]>(messagesQueryKey, (old = []) => [
         ...old,
         newUserMessage
@@ -158,12 +162,11 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
       if (data.messages?.length === 2) {
         queryClient.setQueryData<Message[]>(messagesQueryKey, (old = []) => {
           const filtered = old.filter(msg => msg.timestamp !== timestamp);
-          // Set contentType as 'chat' for new messages
-          const messagesWithType = data.messages.map((msg: Message) => ({
-            ...msg,
-            contentType: "chat"
-          }));
-          return [...filtered, ...messagesWithType];
+          // Only add messages with chat contentType to the chat feed
+          const chatMessages = data.messages.filter((msg: Message) => 
+            msg.contentType === 'chat' || (!msg.contentType && msg.role === 'user')
+          );
+          return [...filtered, ...chatMessages];
         });
       }
 
