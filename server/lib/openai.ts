@@ -2,54 +2,47 @@ import OpenAI from "openai";
 import { db } from "@db";
 import { eq, and } from "drizzle-orm";
 import { settings, users, projects, todos, chats } from "@db/schema";
-import { updateChatContext, createEmbedding, findRecommendedTasks } from './embeddings';
+import { updateChatContext, createEmbedding } from './embeddings';
+import { findRecommendedTasks } from './embeddings';
 import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 import { marked } from 'marked';
 
-// =============================================================================
-// Types and Interfaces
-// =============================================================================
-
-interface ChatOptions {
-  userId: number;
-  message: string;
-  context?: {
-    transcription?: string | null;
-    summary?: string | null;
-    projectId?: number;
-    note?: string | null;
-  };
-  contentType?: 'chat' | 'insight' | 'transcript' | 'task';
-  promptType?: 'primary' | 'todo' | 'system';
-}
-
-// =============================================================================
-// Helper Functions for Content Formatting
-// =============================================================================
-
-// Configure marked for clean HTML output compatible with TipTap
+// Configure marked for clean HTML output compatible with TipTap and our styling
 marked.setOptions({
-  gfm: true,
-  breaks: true,
-  headerPrefix: '',
-  headerIds: false,
-  smartypants: true,
+  gfm: true, // GitHub Flavored Markdown
+  breaks: true, // Convert \n to <br>
+  mangle: false, // Don't escape HTML
+  sanitize: false, // Don't sanitize HTML (we handle this on the frontend)
+  headerPrefix: '', // Don't prefix headers
+  headerIds: false, // Don't add IDs to headers
+  smartypants: true, // Use smart punctuation
 });
 
-// Convert markdown to clean HTML with minimal formatting
+// Helper function to convert markdown to HTML with minimal formatting
 function convertMarkdownToHTML(markdown: string): string {
   if (!markdown) return '';
 
   try {
+    // Convert markdown to HTML
     const html = marked(markdown);
+
+    // Clean up HTML but preserve essential formatting
     return html
+      // Remove any style attributes
       .replace(/\sstyle="[^"]*"/g, '')
+      // Remove any class attributes
       .replace(/\sclass="[^"]*"/g, '')
+      // Clean up empty paragraphs
       .replace(/<p>\s*<\/p>/g, '')
+      // Remove any data attributes
       .replace(/\sdata-[^=]*="[^"]*"/g, '')
+      // Clean up multiple line breaks while preserving intentional spacing
       .replace(/(\r?\n){3,}/g, '\n\n')
+      // Ensure proper spacing around list items
       .replace(/<\/li><li>/g, '</li>\n<li>')
+      // Ensure proper spacing around headers
       .replace(/<\/h([1-6])><h([1-6])>/g, '</h$1>\n<h$2>')
+      // Normalize whitespace
       .trim();
   } catch (error) {
     console.error('Error converting markdown to HTML:', error);
@@ -57,10 +50,7 @@ function convertMarkdownToHTML(markdown: string): string {
   }
 }
 
-// =============================================================================
-// Task Processing Utilities
-// =============================================================================
-
+// Task filtering functions - used by routes.ts only
 export function isEmptyTaskResponse(text: string): boolean {
   if (!text || typeof text !== 'string') {
     console.log('Empty task check: Invalid or empty input');
@@ -91,25 +81,29 @@ export function isEmptyTaskResponse(text: string): boolean {
     "no actions",
   ];
 
+  // First check exact matches
   if (excludedPhrases.includes(trimmedText)) {
     console.log('Empty task check: Exact match found:', trimmedText);
     return true;
   }
 
+  // Then check for phrases within the text
   const hasPhrase = excludedPhrases.some(phrase => {
     const includes = trimmedText.includes(phrase);
     if (includes) {
-      console.log('Empty task check: Phrase match found:', phrase);
+      console.log('Empty task check: Phrase match found:', phrase, 'in:', trimmedText);
     }
     return includes;
   });
 
+  // Check for common patterns that might indicate an empty task message
   const containsOnlyPunctuation = /^[\s\.,!?:;-]*$/.test(trimmedText);
   if (containsOnlyPunctuation) {
     console.log('Empty task check: Contains only punctuation');
     return true;
   }
 
+  // Additional pattern checks for empty task indicators
   const patternChecks = [
     /^no\s+.*\s+found/i,
     /^could\s+not\s+.*\s+any/i,
@@ -124,7 +118,7 @@ export function isEmptyTaskResponse(text: string): boolean {
   const matchesPattern = patternChecks.some(pattern => {
     const matches = pattern.test(trimmedText);
     if (matches) {
-      console.log('Empty task check: Pattern match found:', pattern);
+      console.log('Empty task check: Pattern match found:', pattern, 'in:', trimmedText);
     }
     return matches;
   });
@@ -153,14 +147,27 @@ export async function cleanupEmptyTasks(projectId: number): Promise<void> {
   }
 }
 
-// =============================================================================
-// OpenAI Configuration & Core Setup
-// =============================================================================
+// the newest OpenAI model is "gpt-4o" which was released May 13, 2024
+const CHAT_MODEL = "gpt-4o";
 
-const CHAT_MODEL = "gpt-4o"; // Latest model as of May 13, 2024
+interface ChatOptions {
+  userId: number;
+  message: string;
+  context?: {
+    transcription?: string | null;
+    summary?: string | null;
+    projectId?: number;
+    note?: string | null;
+  };
+  promptType?: 'primary' | 'todo' | 'system';
+}
 
-// Get user's OpenAI API key and custom prompts
-async function getUserSettings(userId: number) {
+export async function createChatCompletion({
+  userId,
+  message,
+  context,
+  promptType = 'system'
+}: ChatOptions) {
   const user = await db.query.users.findFirst({
     where: eq(users.id, userId),
   });
@@ -179,71 +186,86 @@ async function getUserSettings(userId: number) {
     throw new Error("OpenAI API key not found. Please add your API key in settings.");
   }
 
-  return {
+  // Use user's custom prompts or fall back to defaults
+  const primaryPrompt = userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT;
+  const todoPrompt = userSettings?.todoPrompt || DEFAULT_TODO_PROMPT;
+  const systemPrompt = userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+
+  const openai = new OpenAI({
     apiKey,
-    insightPrompt: userSettings?.insightPrompt || DEFAULT_PRIMARY_PROMPT,
-    todoPrompt: userSettings?.todoPrompt || DEFAULT_TODO_PROMPT,
-    systemPrompt: userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT,
-  };
-}
+  });
 
-// =============================================================================
-// Main Chat Completion Function
-// =============================================================================
-
-export async function createChatCompletion({
-  userId,
-  message,
-  context,
-  contentType = 'chat',
-  promptType = 'system'
-}: ChatOptions) {
-  // Get user settings and API key
-  const settings = await getUserSettings(userId);
-  const openai = new OpenAI({ apiKey: settings.apiKey });
-
-  // Select appropriate prompt based on content type
-  let basePrompt;
-  switch (contentType) {
-    case 'insight':
-      basePrompt = settings.insightPrompt;
-      break;
-    case 'task':
-      basePrompt = settings.todoPrompt;
-      break;
-    case 'transcript':
-      basePrompt = "Please provide a clean, well-formatted transcript of the audio content.";
-      break;
-    default:
-      basePrompt = settings.systemPrompt;
-  }
-
-  // Build context for the chat
   const userData = await getContextData(userId);
   const { enhancedContext, similarityScore } = await updateChatContext(userId, message);
 
-  // Only fetch recommended tasks for chat and insight content types
-  let recommendedTasks = [];
-  if (contentType === 'chat' || contentType === 'insight') {
-    const taskResults = await findRecommendedTasks(userId, message, {
-      limit: 5,
-      minSimilarity: 0.5,
-      includeCompleted: false
-    });
-    recommendedTasks = taskResults.recommendations;
-  }
+  const { recommendations: recommendedTasks } = await findRecommendedTasks(userId, message, {
+    limit: 5,
+    minSimilarity: 0.5,
+    includeCompleted: false
+  });
 
-  // Build system message with appropriate context
-  let systemMessage = `${basePrompt}\n\n`;
+  // Select the appropriate prompt based on the promptType
+  const basePrompt = promptType === 'todo' 
+    ? todoPrompt 
+    : promptType === 'primary'
+      ? primaryPrompt 
+      : systemPrompt;
 
-  // Add chat-specific context
-  if (contentType === 'chat') {
-    systemMessage += buildChatContext(userData);
-  }
+  // Build system message with enhanced contextual awareness and selected prompt
+  let systemMessage = `${basePrompt}\n\nDatabase Context:
+Total Projects: ${userData.totalProjects}
+Total Recordings: ${userData.totalRecordings}
+Total Tasks: ${userData.totalTodos} (${userData.totalCompletedTodos} completed)
 
-  // Add project-specific context when available
+${userData.latestRecording ? `Latest Recording:
+Title: "${userData.latestRecording.title}"
+Created: ${userData.latestRecording.createdAt.toLocaleString()}
+Has Transcription: ${!!userData.latestRecording.transcription}
+Has Summary: ${!!userData.latestRecording.summary}
+${userData.latestRecording.transcription ? `\nTranscription Preview:\n${userData.latestRecording.transcription.substring(0, 500)}...` : ''}
+${userData.latestRecording.summary ? `\nSummary:\n${userData.latestRecording.summary}` : ''}
+` : 'No recordings available.'}
+
+Available Projects and Recordings:
+${userData.projects.map(p => `
+Project: "${p.title}" (Created: ${p.createdAt.toLocaleString()})
+Type: ${p.isRecording ? 'Recording' : 'Project'}
+${p.description ? `Description: ${p.description}` : ''}
+${p.transcription ? `Has Transcription: Yes\nTranscription Preview:\n${p.transcription.substring(0, 300)}...` : ''}
+${p.summary ? `\nSummary:\n${p.summary}` : ''}
+Tasks (${p.todoCount} total, ${p.completedTodos} completed):
+${p.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'}, Created: ${t.createdAt.toLocaleString()})`).join('\n') || 'No tasks'}
+${p.note ? `\nNotes (Last updated: ${p.note.updatedAt.toLocaleString()}):\n${p.note.content}` : ''}
+`).join('\n')}
+
+Relevant Context:
+${formatContextForPrompt(enhancedContext)}
+
+Recommended Tasks Based on Current Context:
+${recommendedTasks.length > 0
+    ? recommendedTasks.map(task =>
+      `- [${task.completed ? 'Completed' : 'Pending'}] ${task.text}${
+        task.projectTitle ? ` (Project: ${task.projectTitle})` : ''
+      }`
+    ).join('\n')
+    : 'No specifically relevant tasks found for this conversation.'}`;
+
+  // For project-specific chat, add focused context
   if (context?.projectId) {
-    systemMessage += buildProjectContext(userData, context.projectId);
+    const projectContext = userData.projects.find(p => p.id === context.projectId);
+    if (projectContext) {
+      systemMessage += `\n\nFocused Project Context:
+Title: "${projectContext.title}"
+${projectContext.description ? `Description: ${projectContext.description}\n` : ''}
+Created: ${projectContext.createdAt.toLocaleString()}
+Tasks: ${projectContext.todoCount} total (${projectContext.completedTodos} completed)
+${projectContext.transcription ? `\nTranscription:\n${projectContext.transcription}` : ''}
+${projectContext.summary ? `\nSummary:\n${projectContext.summary}` : ''}
+${projectContext.note ? `\nNotes:\n${projectContext.note.content}` : ''}
+
+Current Tasks:
+${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'})`).join('\n') || 'No tasks'}`;
+    }
   }
 
   try {
@@ -251,21 +273,54 @@ export async function createChatCompletion({
       model: CHAT_MODEL,
       messages: [
         { role: "system", content: systemMessage },
-        { role: "user", content: `${context?.note ? `User's Note:\n${context.note}\n\n` : ''}${message}` },
+        { role: "user", content: `User's Note:\n${context?.note || 'No existing note'}\n\nTranscript:\n${message}` },
       ],
-      temperature: contentType === 'transcript' ? 0.1 : 0.2,
+      temperature: 0.2,
       max_tokens: 8000,
     });
 
     const assistantResponse = response.choices[0].message.content || "";
+    console.log('GPT response:', assistantResponse);
 
-    // Format response based on content type
-    let finalResponse = formatResponse(assistantResponse, contentType);
+    // Only convert to HTML if it's not a todo prompt
+    const finalResponse = promptType === 'todo'
+      ? assistantResponse  // Keep tasks as plain text
+      : convertMarkdownToHTML(assistantResponse); // Convert insights to HTML
 
-    // Store chat history if it's a direct chat interaction
-    if (contentType === 'chat') {
-      await storeChatHistory(userId, message, finalResponse, context?.projectId);
-    }
+    console.log('Final response:', finalResponse);
+
+    const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
+      const [userMsg] = await tx.insert(chats).values({
+        userId,
+        role: "user",
+        content: message,
+        projectId: context?.projectId || null,
+        timestamp: new Date(),
+      }).returning();
+
+      const [assistantMsg] = await tx.insert(chats).values({
+        userId,
+        role: "assistant",
+        content: finalResponse,
+        projectId: context?.projectId || null,
+        timestamp: new Date(),
+      }).returning();
+
+      return [userMsg, assistantMsg];
+    });
+
+    await Promise.all([
+      createEmbedding({
+        contentType: 'chat',
+        contentId: userMessage.id,
+        contentText: message,
+      }),
+      createEmbedding({
+        contentType: 'chat',
+        contentId: assistantMessage.id,
+        contentText: finalResponse,
+      })
+    ]);
 
     return {
       message: finalResponse,
@@ -281,10 +336,6 @@ export async function createChatCompletion({
   }
 }
 
-// =============================================================================
-// Context Building Utilities
-// =============================================================================
-
 async function getContextData(userId: number) {
   const userProjects = await db.query.projects.findMany({
     where: eq(projects.userId, userId),
@@ -295,6 +346,7 @@ async function getContextData(userId: number) {
     orderBy: (projects, { desc }) => [desc(projects.createdAt)],
   });
 
+  // Get the most recent recording first
   const latestRecording = userProjects.find(p => p.recordingUrl && p.recordingUrl !== 'personal.none');
 
   const projectsContext = userProjects.map(project => ({
@@ -336,84 +388,23 @@ async function getContextData(userId: number) {
   };
 }
 
-// Format AI response based on content type
-function formatResponse(response: string, contentType: string): string {
-  switch (contentType) {
-    case 'insight':
-    case 'chat':
-      return convertMarkdownToHTML(response);
-    case 'transcript':
-      return response.replace(/\n{3,}/g, '\n\n').trim();
-    case 'task':
-      return response;
-    default:
-      return response;
+function formatContextForPrompt(enhancedContext: any[]): string {
+  if (!Array.isArray(enhancedContext) || enhancedContext.length === 0) {
+    return 'No relevant context found.';
   }
-}
 
-// Build chat context string
-function buildChatContext(userData: any): string {
-  return `Database Context:
-Total Projects: ${userData.totalProjects}
-Total Recordings: ${userData.totalRecordings}
-Total Tasks: ${userData.totalTodos} (${userData.totalCompletedTodos} completed)
+  return enhancedContext
+    .map(ctx => {
+      if (!ctx || typeof ctx !== 'object') return '';
 
-${userData.latestRecording ? `Latest Recording:
-Title: "${userData.latestRecording.title}"
-Created: ${userData.latestRecording.createdAt.toLocaleString()}
-Has Transcription: ${!!userData.latestRecording.transcription}
-Has Summary: ${!!userData.latestRecording.summary}
-${userData.latestRecording.transcription ? `\nTranscription Preview:\n${userData.latestRecording.transcription.substring(0, 500)}...` : ''}
-${userData.latestRecording.summary ? `\nSummary:\n${userData.latestRecording.summary}` : ''}
-` : 'No recordings available.'}`;
-}
+      const type = ctx.type || 'Unknown';
+      const source = type.charAt(0).toUpperCase() + type.slice(1);
+      const metadata = ctx.metadata ?
+        `(${new Date(ctx.metadata.timestamp || ctx.metadata.created_at).toLocaleString()})` : '';
+      const text = typeof ctx.text === 'string' ? ctx.text : 'No content available';
 
-// Build project-specific context string
-function buildProjectContext(userData: any, projectId: number): string {
-  const projectContext = userData.projects.find((p: any) => p.id === projectId);
-  if (!projectContext) return '';
-
-  return `\n\nProject Context:
-Title: "${projectContext.title}"
-${projectContext.description ? `Description: ${projectContext.description}\n` : ''}
-Created: ${projectContext.createdAt.toLocaleString()}
-${projectContext.transcription ? `\nTranscription:\n${projectContext.transcription}` : ''}
-${projectContext.summary ? `\nSummary:\n${projectContext.summary}` : ''}
-${projectContext.note ? `\nNotes:\n${projectContext.note.content}` : ''}`;
-}
-
-// Store chat history and create embeddings
-async function storeChatHistory(userId: number, userMessage: string, assistantResponse: string, projectId: number | null) {
-  const [userMsg, assistantMsg] = await db.transaction(async (tx) => {
-    const [userMessage] = await tx.insert(chats).values({
-      userId,
-      role: "user",
-      content: userMessage,
-      projectId: projectId || null,
-      timestamp: new Date(),
-    }).returning();
-
-    const [assistantMessage] = await tx.insert(chats).values({
-      userId,
-      role: "assistant",
-      content: assistantResponse,
-      projectId: projectId || null,
-      timestamp: new Date(),
-    }).returning();
-
-    return [userMessage, assistantMessage];
-  });
-
-  await Promise.all([
-    createEmbedding({
-      contentType: 'chat',
-      contentId: userMsg.id,
-      contentText: userMessage,
-    }),
-    createEmbedding({
-      contentType: 'chat',
-      contentId: assistantMsg.id,
-      contentText: assistantResponse,
+      return `[${source}] ${metadata}\n${text.substring(0, 200)}${text.length > 200 ? '...' : ''}`;
     })
-  ]);
+    .filter(Boolean)
+    .join('\n\n');
 }
