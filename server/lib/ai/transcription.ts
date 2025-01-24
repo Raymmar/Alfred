@@ -32,6 +32,7 @@ export async function transcribeAudio(
 
 // Utility function to validate audio file before processing
 export function validateAudioFile(filePath: string): boolean {
-  // Add validation logic here if needed
+  // TODO: Implement audio file validation
+  // For now, we'll assume all files are valid
   return true;
 }

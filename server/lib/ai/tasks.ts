@@ -1,5 +1,4 @@
 import { getOpenAIClient, AIServiceConfig, handleAIError, CHAT_MODEL } from "./config";
-import { DEFAULT_TODO_PROMPT } from "@/lib/constants";
 import { db } from "@db";
 import { settings } from "@db/schema";
 import { eq } from "drizzle-orm";
@@ -20,13 +19,17 @@ export async function extractTasks(
 ): Promise<Task[]> {
   try {
     const openai = await getOpenAIClient(options.userId);
-    
+
     // Get user's custom prompt or use default
     const userSettings = await db.query.settings.findFirst({
       where: eq(settings.userId, options.userId),
     });
 
-    const prompt = options.customPrompt || userSettings?.todoPrompt || DEFAULT_TODO_PROMPT;
+    const prompt = options.customPrompt || userSettings?.todoPrompt;
+
+    if (!prompt) {
+      throw new Error("No task extraction prompt configured. Please set a prompt in settings.");
+    }
 
     const response = await openai.chat.completions.create({
       model: CHAT_MODEL,
@@ -48,7 +51,11 @@ export async function extractTasks(
     const tasks = JSON.parse(content || "[]");
 
     // Ensure we have an array of tasks
-    return Array.isArray(tasks) ? tasks : [];
+    return Array.isArray(tasks) ? tasks.map(task => ({
+      text: task.text || '',
+      assignee: task.assignee,
+      priority: task.priority,
+    })) : [];
   } catch (error) {
     handleAIError(error);
   }

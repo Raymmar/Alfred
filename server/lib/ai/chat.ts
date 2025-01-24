@@ -1,5 +1,4 @@
 import { getOpenAIClient, AIServiceConfig, handleAIError, CHAT_MODEL, cleanMarkdownResponse } from "./config";
-import { DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 import { db } from "@db";
 import { settings, chats } from "@db/schema";
 import { eq } from "drizzle-orm";
@@ -22,13 +21,17 @@ export interface ChatResponse {
 export async function createChatCompletion(options: ChatOptions): Promise<ChatResponse> {
   try {
     const openai = await getOpenAIClient(options.userId);
-    
+
     // Get user's custom prompt or use default
     const userSettings = await db.query.settings.findFirst({
       where: eq(settings.userId, options.userId),
     });
 
-    const systemPrompt = options.systemPrompt || userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+    const systemPrompt = options.systemPrompt || userSettings?.systemPrompt;
+
+    if (!systemPrompt) {
+      throw new Error("No system prompt configured. Please set a prompt in settings.");
+    }
 
     // Build system message with context
     let systemMessage = `${systemPrompt}\n\n`;

@@ -73,19 +73,17 @@ export const chats = pgTable("chats", {
   timestamp: timestamp("timestamp").notNull().defaultNow(),
 });
 
-// Define a custom vector type for pgvector
-const vector = (size: number) => text("embedding").notNull().$type(`vector(${size})`);
-
+// Define embeddings table without vector type for now
 export const embeddings = pgTable("embeddings", {
   id: serial("id").primaryKey(),
   contentType: text("content_type").notNull(),
   contentId: integer("content_id").notNull(),
   contentText: text("content_text").notNull(),
-  embedding: vector(384),
+  embedding: text("embedding").notNull(),  // Store as JSON string for now
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
-// Relations
+// Relations definitions
 export const userRelations = relations(users, ({ many, one }) => ({
   projects: many(projects),
   settings: one(settings, {
@@ -146,25 +144,7 @@ export const chatRelations = relations(chats, ({ one }) => ({
   }),
 }));
 
-export const embeddingsRelations = relations(embeddings, ({ one }) => ({
-  project: one(projects, {
-    fields: [embeddings.contentId],
-    references: [projects.id],
-    relationName: "project_embeddings",
-  }),
-  chat: one(chats, {
-    fields: [embeddings.contentId],
-    references: [chats.id],
-    relationName: "chat_embeddings",
-  }),
-  todo: one(todos, {
-    fields: [embeddings.contentId],
-    references: [todos.id],
-    relationName: "todo_embeddings",
-  }),
-}));
 
-// Schema exports
 export const insertUserSchema = createInsertSchema(users);
 export const selectUserSchema = createSelectSchema(users);
 export type InsertUser = typeof users.$inferInsert;

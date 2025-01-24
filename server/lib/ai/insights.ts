@@ -1,5 +1,4 @@
 import { getOpenAIClient, AIServiceConfig, handleAIError, CHAT_MODEL, cleanMarkdownResponse } from "./config";
-import { DEFAULT_PRIMARY_PROMPT } from "@/lib/constants";
 import { db } from "@db";
 import { settings } from "@db/schema";
 import { eq } from "drizzle-orm";
@@ -19,13 +18,17 @@ export async function generateInsights(
 ): Promise<InsightResult> {
   try {
     const openai = await getOpenAIClient(options.userId);
-    
+
     // Get user's custom prompt or use default
     const userSettings = await db.query.settings.findFirst({
       where: eq(settings.userId, options.userId),
     });
 
-    const prompt = options.customPrompt || userSettings?.insightPrompt || DEFAULT_PRIMARY_PROMPT;
+    const prompt = options.customPrompt || userSettings?.insightPrompt;
+
+    if (!prompt) {
+      throw new Error("No insight prompt configured. Please set a prompt in settings.");
+    }
 
     const response = await openai.chat.completions.create({
       model: CHAT_MODEL,

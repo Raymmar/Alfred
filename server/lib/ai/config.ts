@@ -26,11 +26,12 @@ export async function getOpenAIClient(userId: number): Promise<OpenAI> {
     throw new Error("User not found");
   }
 
+  // Get user's settings to check for API key
   const userSettings = await db.query.settings.findFirst({
     where: eq(settings.userId, userId),
   });
 
-  const apiKey = userSettings?.openAiKey || user.openaiApiKey;
+  const apiKey = userSettings?.openAiKey || process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
     throw new Error("OpenAI API key not found. Please add your API key in settings.");
@@ -42,7 +43,7 @@ export async function getOpenAIClient(userId: number): Promise<OpenAI> {
 // Helper function to clean and format markdown response
 export function cleanMarkdownResponse(markdown: string): string {
   if (!markdown) return '';
-  
+
   return markdown
     .replace(/\n{3,}/g, '\n\n') // Normalize multiple line breaks
     .replace(/^\s+|\s+$/g, '') // Trim whitespace
@@ -50,8 +51,9 @@ export function cleanMarkdownResponse(markdown: string): string {
     .trim();
 }
 
-// Helper function to handle API errors
-export function handleAIError(error: any): never {
+// Helper function to handle API errors with proper typing
+export function handleAIError(error: unknown): never {
+  const errorMessage = error instanceof Error ? error.message : String(error);
   console.error("OpenAI API error:", error);
-  throw new Error(error.message || "Failed to process AI request");
+  throw new Error(errorMessage || "Failed to process AI request");
 }
