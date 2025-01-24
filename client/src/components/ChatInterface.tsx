@@ -7,13 +7,11 @@ import { useToast } from "@/hooks/use-toast";
 import { useProjects } from "@/hooks/use-projects";
 import { cn } from "@/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useUser } from "@/hooks/use-user";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: number | string | Date;
-  userId?: number;
 }
 
 export interface ChatInterfaceProps {
@@ -30,53 +28,22 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
   const { toast } = useToast();
   const { projects } = useProjects();
   const queryClient = useQueryClient();
-  const { user } = useUser();
 
   const selectedProject = projectId 
     ? projects.find(p => p.id === projectId)
     : null;
 
-  const messagesQueryKey = projectId 
-    ? ['messages', projectId, user?.id] 
-    : ['messages', user?.id];
-
+  const messagesQueryKey = projectId ? ['messages', projectId] : ['messages'];
   const chatEndpoint = projectId ? `/api/projects/${projectId}/chat` : '/api/chat';
 
   const { data: messages = [] } = useQuery<Message[]>({
     queryKey: messagesQueryKey,
-    queryFn: async () => {
-      console.log('Fetching messages:', {
-        userId: user?.id,
-        projectId,
-        endpoint: projectId ? `/api/projects/${projectId}/messages` : '/api/messages'
-      });
-
-      const response = await fetch(
-        projectId ? `/api/projects/${projectId}/messages` : '/api/messages',
-        {
-          credentials: 'include'
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch messages');
-      }
-
-      const data = await response.json();
-      console.log('Received messages:', {
-        userId: user?.id,
-        messageCount: data.length,
-        projectId
-      });
-
-      return data;
-    },
-    enabled: !!user,
+    enabled: true,
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,
     refetchOnWindowFocus: false,
-    refetchOnMount: true,
+    refetchOnMount: false,
     refetchOnReconnect: false,
   });
 
@@ -116,8 +83,7 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
       const newUserMessage = {
         role: "user" as const,
         content: currentInput,
-        timestamp,
-        userId: user?.id
+        timestamp
       };
 
       queryClient.setQueryData<Message[]>(messagesQueryKey, (old = []) => [

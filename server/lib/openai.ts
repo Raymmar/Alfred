@@ -147,7 +147,7 @@ export async function cleanupEmptyTasks(projectId: number): Promise<void> {
   }
 }
 
-// the newest OpenAI model is "gpt-4o" which was released May 13, 2024
+// the newest OpenAI model is "gpt-4o" which was released May 13, 2024. do not change this unless explicitly requested by the user
 const CHAT_MODEL = "gpt-4o";
 
 interface ChatOptions {
@@ -157,7 +157,6 @@ interface ChatOptions {
     transcription?: string | null;
     summary?: string | null;
     projectId?: number;
-    note?: string | null;
   };
   promptType?: 'primary' | 'todo' | 'system';
 }
@@ -205,10 +204,10 @@ export async function createChatCompletion({
   });
 
   // Select the appropriate prompt based on the promptType
-  const basePrompt = promptType === 'todo' 
-    ? todoPrompt 
+  const basePrompt = promptType === 'todo'
+    ? todoPrompt
     : promptType === 'primary'
-      ? primaryPrompt 
+      ? primaryPrompt
       : systemPrompt;
 
   // Build system message with enhanced contextual awareness and selected prompt
@@ -273,10 +272,10 @@ ${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pe
       model: CHAT_MODEL,
       messages: [
         { role: "system", content: systemMessage },
-        { role: "user", content: `User's Note:\n${context?.note || 'No existing note'}\n\nTranscript:\n${message}` },
+        { role: "user", content: message },
       ],
-      temperature: 0.2,
-      max_tokens: 8000,
+      temperature: 0.7,
+      max_tokens: 500,
     });
 
     const assistantResponse = response.choices[0].message.content || "";
