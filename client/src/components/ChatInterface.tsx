@@ -14,6 +14,7 @@ interface Message {
   content: string;
   timestamp: number | string | Date;
   userId?: number;
+  contentType?: "chat" | "insight" | "transcript" | "task";
 }
 
 export interface ChatInterfaceProps {
@@ -69,7 +70,13 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
         projectId
       });
 
-      return data;
+      // Filter out non-chat content
+      return data.filter((msg: Message) => {
+        // If no contentType is specified, treat it as chat content
+        if (!msg.contentType) return true;
+        // Only show messages with contentType 'chat'
+        return msg.contentType === 'chat';
+      });
     },
     enabled: !!user,
     staleTime: Infinity,
@@ -117,7 +124,8 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
         role: "user" as const,
         content: currentInput,
         timestamp,
-        userId: user?.id
+        userId: user?.id,
+        contentType: "chat" as const
       };
 
       queryClient.setQueryData<Message[]>(messagesQueryKey, (old = []) => [
@@ -150,7 +158,12 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
       if (data.messages?.length === 2) {
         queryClient.setQueryData<Message[]>(messagesQueryKey, (old = []) => {
           const filtered = old.filter(msg => msg.timestamp !== timestamp);
-          return [...filtered, ...data.messages];
+          // Set contentType as 'chat' for new messages
+          const messagesWithType = data.messages.map((msg: Message) => ({
+            ...msg,
+            contentType: "chat"
+          }));
+          return [...filtered, ...messagesWithType];
         });
       }
 
