@@ -3,17 +3,14 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { queryClient } from '@/lib/queryClient';
 import type { SelectProject } from '@db/schema';
-import { DEFAULT_PRIMARY_PROMPT } from '@/lib/constants';
 
 const SAVE_DELAY = 1000; // 1 second debounce
 
 interface UseSummaryProps {
   projectId?: number;
-  noteContent?: string;
-  defaultPrompt?: string;
 }
 
-export function useSummary({ projectId, noteContent, defaultPrompt }: UseSummaryProps) {
+export function useSummary({ projectId }: UseSummaryProps) {
   const { toast } = useToast();
   const [content, setContent] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -78,60 +75,6 @@ export function useSummary({ projectId, noteContent, defaultPrompt }: UseSummary
     },
   });
 
-  // Generate insights mutation
-  const { mutateAsync: generateInsightsMutation } = useMutation({
-    mutationFn: async (noteContent: string) => {
-      if (!projectId) {
-        throw new Error('No project ID provided');
-      }
-
-      const response = await fetch(`/api/projects/${projectId}/generate-insights`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          noteContent,
-          customPrompt: defaultPrompt || DEFAULT_PRIMARY_PROMPT,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to generate insights');
-      }
-
-      const data = await response.json();
-      return data.insights;
-    },
-    onSuccess: (insights) => {
-      setContent(insights);
-      if (projectId) {
-        queryClient.invalidateQueries({
-          queryKey: ['projects', projectId],
-        });
-      }
-    },
-  });
-
-  // Function to trigger insights generation
-  const generateInsights = useCallback(async (currentNoteContent: string) => {
-    try {
-      setIsSaving(true);
-      await generateInsightsMutation(currentNoteContent);
-      toast({
-        title: "Success",
-        description: "Insights generated successfully",
-      });
-    } catch (error) {
-      console.error('Failed to generate insights:', error);
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to generate insights",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSaving(false);
-    }
-  }, [generateInsightsMutation, toast]);
-
   // Debounced save handler with HTML format preservation
   const handleContentChange = useCallback((newContent: string) => {
     setContent(newContent);
@@ -170,6 +113,5 @@ export function useSummary({ projectId, noteContent, defaultPrompt }: UseSummary
     content,
     setContent: handleContentChange,
     isSaving,
-    generateInsights,
   };
 }
