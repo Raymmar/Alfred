@@ -17,9 +17,10 @@ interface Message {
 export interface ChatInterfaceProps {
   className?: string;
   projectId?: number;
+  chatType?: 'system' | 'insights' | 'tasks';
 }
 
-export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
+export function ChatInterface({ className, projectId, chatType = 'system' }: ChatInterfaceProps) {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -33,8 +34,14 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
     ? projects.find(p => p.id === projectId)
     : null;
 
-  const messagesQueryKey = projectId ? ['messages', projectId] : ['messages'];
-  const chatEndpoint = projectId ? `/api/projects/${projectId}/chat` : '/api/chat';
+  // Set the appropriate API endpoint based on chat type
+  const messagesQueryKey = projectId 
+    ? ['messages', projectId] 
+    : ['messages', chatType];
+
+  const chatEndpoint = projectId 
+    ? `/api/projects/${projectId}/chat`
+    : `/api/chat/${chatType}`;
 
   const { data: messages = [] } = useQuery<Message[]>({
     queryKey: messagesQueryKey,
@@ -166,7 +173,11 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
             <div className="text-center text-muted-foreground">
               {selectedProject 
                 ? "Ask me anything about this recording..."
-                : "Ask me anything..."}
+                : chatType === 'insights'
+                  ? "Ask me for insights and analysis..."
+                  : chatType === 'tasks'
+                    ? "Ask me to help you manage tasks..."
+                    : "Ask me anything..."}
             </div>
           )}
           {isLoading && (
@@ -182,7 +193,13 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Type your message..."
+          placeholder={
+            chatType === 'insights'
+              ? "Ask for insights and analysis..."
+              : chatType === 'tasks'
+                ? "Ask about tasks..."
+                : "Type your message..."
+          }
           className="flex-1"
           disabled={isLoading}
         />
