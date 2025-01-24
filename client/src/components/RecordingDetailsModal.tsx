@@ -27,12 +27,12 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
 
   useEffect(() => {
     if (open) {
-      setActiveTab('summary');
+      setActiveTab(defaultTab);
     }
-  }, [open]);
+  }, [open, defaultTab]);
 
   // Subscribe to project updates with proper type handling and array query key
-  const { data: projectData } = useQuery<ProjectWithTodos>({
+  const { data: projectData, isLoading } = useQuery<ProjectWithTodos>({
     queryKey: ['projects', project.id],
     enabled: open, // Only fetch when modal is open
     initialData: project,
@@ -97,6 +97,44 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
     }
   };
 
+  const renderContent = (tab: string) => {
+    if (isLoading) {
+      return <div className="animate-pulse bg-muted h-[400px] rounded-md" />;
+    }
+
+    switch (tab) {
+      case 'summary':
+        return (
+          <ScrollArea className="h-[400px] rounded-md border p-4">
+            <div className="prose dark:prose-invert max-w-none" 
+                 dangerouslySetInnerHTML={{ __html: currentProject.summary || 'No insights available yet.' }} />
+          </ScrollArea>
+        );
+      case 'transcript':
+        return (
+          <ScrollArea className="h-[400px] rounded-md border p-4">
+            <div className="whitespace-pre-wrap font-mono text-sm">
+              {currentProject.transcription || 'No transcript available yet.'}
+            </div>
+          </ScrollArea>
+        );
+      case 'tasks':
+        return (
+          <ScrollArea className="h-[400px] rounded-md border bg-transparent">
+            <div className="p-4">
+              <TaskList 
+                maintainOrder 
+                className="w-full"
+                projectId={currentProject.id}
+              />
+            </div>
+          </ScrollArea>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[625px]">
@@ -121,25 +159,13 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
             <TabsTrigger value="tasks">Tasks</TabsTrigger>
           </TabsList>
           <TabsContent value="summary" className="mt-4">
-            <ScrollArea className="h-[400px] rounded-md border p-4">
-              {currentProject.summary}
-            </ScrollArea>
+            {renderContent('summary')}
           </TabsContent>
           <TabsContent value="transcript" className="mt-4">
-            <ScrollArea className="h-[400px] rounded-md border p-4">
-              {currentProject.transcription}
-            </ScrollArea>
+            {renderContent('transcript')}
           </TabsContent>
           <TabsContent value="tasks" className="mt-4">
-            <ScrollArea className="h-[400px] rounded-md border bg-transparent">
-              <div className="p-4">
-                <TaskList 
-                  maintainOrder 
-                  className="w-full"
-                  projectId={currentProject.id}
-                />
-              </div>
-            </ScrollArea>
+            {renderContent('tasks')}
           </TabsContent>
         </Tabs>
       </DialogContent>
