@@ -1,23 +1,33 @@
-import type { Express, Request, Response, NextFunction } from "express";
+import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import { projects, todos, notes, chats, kanbanColumns, users, settings } from "@db/schema";
+import {
+  projects,
+  users,
+  todos,
+  notes,
+  chats,
+  kanbanColumns,
+} from "@db/schema";
 import { desc, eq, and, asc, or } from "drizzle-orm";
 import formidable from "formidable";
 import { spawn } from "child_process";
 import express from "express";
 import path, { join } from "path";
-import fs, { existsSync, createReadStream } from "fs";
-import { ensureStorageDirectory, getRecordingsPath, cleanupOrphanedRecordings, getAudioContentType, isValidAudioFile } from "./storage";
+import fs, { existsSync } from "fs";
+import {
+  ensureStorageDirectory,
+  getRecordingsPath,
+  cleanupOrphanedRecordings,
+  getAudioContentType,
+  isValidAudioFile,
+} from "./storage";
+import { createChatCompletion } from "./lib/openai";
+import { RequestHandler } from "express-serve-static-core";
+import OpenAI from "openai";
 
-// Import our new modular AI services
-import { transcribeAudio, generateInsights, extractTasks, createChatCompletion, generateTitle, type AIServiceConfig } from "./lib/ai";
-
-// Helper function to detect empty task responses
 function isEmptyTaskResponse(text: string): boolean {
-  if (!text?.trim()) return true;
-
   const trimmedText = text.trim().toLowerCase();
   const excludedPhrases = [
     "no task",
@@ -25,45 +35,100 @@ function isEmptyTaskResponse(text: string): boolean {
     "no deliverable",
     "no deliverables",
     "identified",
+    "no tasks identified",
+    "no deliverables identified",
+    "no tasks or deliverables",
+    "no tasks or deliverables identified",
     "no specific tasks",
+    "no specific deliverables",
+    "not found",
     "none found",
+    "none identified",
+    "could not identify",
+    "unable to identify",
+    "no action items",
+    "no actions",
+    "tasks:", // Often precedes empty task lists
+    "action items:", // Often precedes empty task lists
+    "deliverables:", // Often precedes empty task lists
+    "n/a",
+    "none",
     "not applicable",
+    "no specific tasks mentioned",
+    "no clear tasks",
+    "not specified",
   ];
 
-  return excludedPhrases.some(phrase => trimmedText.includes(phrase));
-}
+  // First check exact matches for common AI responses
+  if (excludedPhrases.includes(trimmedText)) {
+    console.log("Task creation blocked: Exact match found:", trimmedText);
+    return true;
+  }
 
-// Helper function to cleanup empty tasks
-async function cleanupEmptyTasks(projectId: number): Promise<void> {
-  const emptyTasks = await db.query.todos.findMany({
-    where: and(
-      eq(todos.projectId, projectId),
-      or(eq(todos.text, ""), eq(todos.text, " ")),
-    ),
+  // Then check for phrases within the text
+  const hasPhrase = excludedPhrases.some((phrase) => {
+    const includes = trimmedText.includes(phrase);
+    if (includes) {
+      console.log(
+        "Task creation blocked: Phrase match found:",
+        phrase,
+        "in:",
+        trimmedText,
+      );
+    }
+    return includes;
   });
 
-  if (emptyTasks.length > 0) {
-    console.log(
-      "Cleaning up empty tasks:",
-      emptyTasks.map((t) => t.id),
+  // Check for common patterns that might indicate an empty task message
+  const patternChecks = [
+    /^no\s+.*\s+found/i,
+    /^could\s+not\s+.*\s+any/i,
+    /^unable\s+to\s+.*\s+any/i,
+    /^did\s+not\s+.*\s+any/i,
+    /^doesn't\s+.*\s+any/i,
+    /^does\s+not\s+.*\s+any/i,
+    /^none\s+.*\s+found/i,
+    /^no\s+.*\s+identified/i,
+  ];
+
+  const matchesPattern = patternChecks.some((pattern) => {
+    const matches = pattern.test(trimmedText);
+    if (matches) {
+      console.log(
+        "Task creation blocked: Pattern match found:",
+        pattern,
+        "in:",
+        trimmedText,
+      );
+    }
+    return matches;
+  });
+
+  return hasPhrase || matchesPattern;
+}
+
+// Helper function to detect duplicate tasks
+async function isDuplicateTask(
+  text: string,
+  projectId: number,
+): Promise<boolean> {
+  if (!text?.trim()) return true;
+
+  const normalizedText = text.trim().toLowerCase();
+
+  // Get existing tasks for this project
+  const existingTasks = await db.query.todos.findMany({
+    where: eq(todos.projectId, projectId),
+  });
+
+  return existingTasks.some((task) => {
+    const normalizedExisting = task.text.trim().toLowerCase();
+    return (
+      normalizedExisting === normalizedText ||
+      normalizedExisting.includes(normalizedText) ||
+      normalizedText.includes(normalizedExisting)
     );
-    await db.delete(todos).where(eq(todos.id, emptyTasks[0].id));
-  }
-}
-
-// Extend Express Request type to include auth properties
-interface AuthRequest extends Request {
-  isAuthenticated(): boolean;
-  user?: any;
-  logout(done: (err: any) => void): void;
-}
-
-function requireAuth(req: AuthRequest, res: Response, next: Function): void {
-  if (!req.isAuthenticated()) {
-    res.status(401).json({ message: "Not authenticated" });
-    return;
-  }
-  next();
+  });
 }
 
 // Helper function to reassemble chunked recording
@@ -121,6 +186,39 @@ async function reassembleChunkedRecording(
     console.error("Error reassembling chunks:", error);
     throw error;
   }
+}
+
+// Helper function to clean up empty tasks
+async function cleanupEmptyTasks(projectId: number): Promise<void> {
+  const emptyTasks = await db.query.todos.findMany({
+    where: and(
+      eq(todos.projectId, projectId),
+      or(eq(todos.text, ""), eq(todos.text, " ")),
+    ),
+  });
+
+  if (emptyTasks.length > 0) {
+    console.log(
+      "Cleaning up empty tasks:",
+      emptyTasks.map((t) => t.id),
+    );
+    await db.delete(todos).where((t) => t.id.in(emptyTasks.map((t) => t.id)));
+  }
+}
+
+// Extend Express Request type to include auth properties
+interface AuthRequest extends Request {
+  isAuthenticated(): boolean;
+  user?: any;
+  logout(callback: (err: any) => void): void;
+}
+
+function requireAuth(req: AuthRequest, res: Response, next: Function): void {
+  if (!req.isAuthenticated()) {
+    res.status(401).json({ message: "Not authenticated" });
+    return;
+  }
+  next();
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -379,12 +477,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return res.status(400).json({ message: "Invalid message" });
           }
 
-          const response = await createChatCompletion({
-            userId: req.user!.id,
-            message: message.trim(),
-          });
+          const [userMessage, assistantMessage] = await db.transaction(
+            async (tx) => {
+              const [userMsg] = await tx
+                .insert(chats)
+                .values({
+                  userId: req.user!.id,
+                  role: "user",
+                  content: message.trim(),
+                  projectId: null,
+                  timestamp: new Date(),
+                })
+                .returning();
 
-          res.json(response);
+              const aiResponse = await createChatCompletion({
+                userId: req.user!.id,
+                message: message.trim(),
+              });
+
+              const [assistantMsg] = await tx
+                .insert(chats)
+                .values({
+                  userId: req.user!.id,
+                  role: "assistant",
+                  content: aiResponse.message,
+                  projectId: null,
+                  timestamp: new Date(),
+                })
+                .returning();
+
+              return [userMsg, assistantMsg];
+            },
+          );
+
+          res.json({
+            message: assistantMessage.content,
+            messages: [userMessage, assistantMessage],
+          });
         } catch (error: any) {
           console.error("Chat error:", error);
           res.status(500).json({
@@ -393,8 +522,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       },
     );
+    app.get(
+      "/api/projects/:projectId/messages",
+      requireAuth,
+      async (req: AuthRequest, res: Response) => {
+        try {
+          const projectId = parseInt(req.params.projectId);
+          if (isNaN(projectId)) {
+            return res.status(400).json({ message: "Invalid project ID" });
+          }
 
-    // Project-specific chat endpoints
+          const [project] = await db.query.projects.findMany({
+            where: eq(projects.id, projectId),
+            limit: 1,
+          });
+
+          if (!project) {
+            return res.status(404).json({ message: "Project not found" });
+          }
+
+          if (project.userId !== req.user!.id) {
+            return res.status(403).json({ message: "Not authorized" });
+          }
+
+          const messages = await db.query.chats.findMany({
+            where: and(
+              eq(chats.userId, req.user!.id),
+              eq(chats.projectId, projectId),
+            ),
+            orderBy: asc(chats.timestamp),
+          });
+
+          res.json(messages);
+        } catch (error: any) {
+          console.error("Error fetching project chat messages:", error);
+          res.status(500).json({ message: "Failed to fetch messages" });
+        }
+      },
+    );
     app.post(
       "/api/projects/:projectId/chat",
       requireAuth,
@@ -423,17 +588,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return res.status(403).json({ message: "Not authorized" });
           }
 
-          const response = await createChatCompletion({
+          const [userMessage] = await db
+            .insert(chats)
+            .values({
+              userId: req.user!.id,
+              projectId,
+              role: "user",
+              content: message.trim(),
+              timestamp: new Date(),
+            })
+            .returning();
+
+          const aiResponse = await createChatCompletion({
             userId: req.user!.id,
             message: message.trim(),
             context: {
               transcription: project.transcription,
               summary: project.summary,
-              projectId,
             },
           });
 
-          res.json(response);
+          const [assistantMessage] = await db
+            .insert(chats)
+            .values({
+              userId: req.user!.id,
+              projectId,
+              role: "assistant",
+              content: aiResponse.message,
+              timestamp: new Date(),
+            })
+            .returning();
+
+          res.json({
+            message: aiResponse.message,
+            messages: [userMessage, assistantMessage],
+          });
         } catch (error: any) {
           console.error("Project chat error:", error);
           res.status(500).json({
@@ -442,149 +631,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       },
     );
-
-    // Insights generation endpoint
-    app.post(
-      "/api/projects/:projectId/insights",
-      requireAuth,
-      async (req: AuthRequest, res: Response) => {
-        try {
-          const projectId = parseInt(req.params.projectId);
-          const { customPrompt } = req.body;
-
-          const [project] = await db.query.projects.findMany({
-            where: eq(projects.id, projectId),
-            limit: 1,
-          });
-
-          if (!project) {
-            return res.status(404).json({ message: "Project not found" });
-          }
-
-          if (project.userId !== req.user!.id) {
-            return res.status(403).json({ message: "Not authorized" });
-          }
-
-          const insights = await generateInsights(project.transcription!, {
-            userId: req.user!.id,
-            customPrompt,
-            context: {
-              projectId,
-              transcription: project.transcription,
-              summary: project.summary,
-            },
-          });
-
-          res.json(insights);
-        } catch (error: any) {
-          console.error("Insights generation error:", error);
-          res.status(500).json({
-            message: error.message || "Failed to generate insights",
-          });
-        }
-      }
-    );
-
-    // Task extraction endpoint
-    app.post(
-      "/api/projects/:projectId/tasks",
-      requireAuth,
-      async (req: AuthRequest, res: Response) => {
-        try {
-          const projectId = parseInt(req.params.projectId);
-          const { customPrompt } = req.body;
-
-          const [project] = await db.query.projects.findMany({
-            where: eq(projects.id, projectId),
-            limit: 1,
-          });
-
-          if (!project) {
-            return res.status(404).json({ message: "Project not found" });
-          }
-
-          if (project.userId !== req.user!.id) {
-            return res.status(403).json({ message: "Not authorized" });
-          }
-
-          const tasks = await extractTasks(project.transcription!, {
-            userId: req.user!.id,
-            customPrompt,
-            context: {
-              projectId,
-              transcription: project.transcription,
-              summary: project.summary,
-            },
-          });
-
-          // Filter out empty tasks
-          const validTasks = tasks.filter(task => !isEmptyTaskResponse(task.text));
-
-          // Create tasks in the database
-          if (validTasks.length > 0) {
-            await db.insert(todos).values(
-              validTasks.map((task, index) => ({
-                projectId,
-                text: task.text,
-                completed: false,
-                order: index,
-                createdAt: new Date(),
-                updatedAt: new Date(),
-              }))
-            );
-          }
-
-          res.json(validTasks);
-        } catch (error: any) {
-          console.error("Task extraction error:", error);
-          res.status(500).json({
-            message: error.message || "Failed to extract tasks",
-          });
-        }
-      }
-    );
-
-    // Title generation endpoint
-    app.post(
-      "/api/projects/:projectId/title",
-      requireAuth,
-      async (req: AuthRequest, res: Response) => {
-        try {
-          const projectId = parseInt(req.params.projectId);
-
-          const [project] = await db.query.projects.findMany({
-            where: eq(projects.id, projectId),
-            limit: 1,
-          });
-
-          if (!project) {
-            return res.status(404).json({ message: "Project not found" });
-          }
-
-          if (project.userId !== req.user!.id) {
-            return res.status(403).json({ message: "Not authorized" });
-          }
-
-          const titleResult = await generateTitle(project.transcription!, {
-            userId: req.user!.id,
-            maxLength: 60,
-          });
-
-          await db.update(projects)
-            .set({ title: titleResult.title })
-            .where(eq(projects.id, projectId));
-
-          res.json(titleResult);
-        } catch (error: any) {
-          console.error("Title generation error:", error);
-          res.status(500).json({
-            message: error.message || "Failed to generate title",
-          });
-        }
-      }
-    );
-
-    // Recording endpoints
     app.get(
       "/api/recordings/:filename/download",
       requireAuth,
@@ -1013,32 +1059,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       requireAuth,
       async (req: AuthRequest, res: Response) => {
         try {
-          const { title, description, recordingUrl, initialNoteContent } = req.body;
+          const { title, description, recordingUrl, initialNoteContent } =
+            req.body;
           const [project] = await db.transaction(async (tx) => {
             const [newProject] = await tx
               .insert(projects)
-                .values({
-                  userId: req.user!.id,
-                  title: title || "Untitled Project",
-                  description: description || "",
-                  recordingUrl,
-                  createdAt: new Date(),
-                  updatedAt: new Date(),
-                })
-                .returning();
-
-            if (initialNoteContent) {
-              await tx.insert(notes).values({
-                projectId: newProject.id,
-                content: initialNoteContent,
-                createdAt: new Date(),
-                updatedAt: new Date(),
-              });
-            }
-
+              .values({
+                title,
+                description,
+                recordingUrl,
+                userId: req.user!.id,
+              })
+              .returning();
+            await tx.insert(notes).values({
+              projectId: newProject.id,
+              content: initialNoteContent || "",
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            });
             return [newProject];
           });
-
           res.json(project);
         } catch (error: any) {
           console.error("Error creating project:", error);
@@ -1170,7 +1210,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return res.status(400).json({ message: "Invalid project ID" });
           }
 
-          // Get project with user verification
           const [project] = await db.query.projects.findMany({
             where: and(
               eq(projects.id, projectId),
@@ -1192,7 +1231,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
           }
 
+          const [user] = await db.query.users.findMany({
+            where: eq(users.id, req.user!.id),
+            limit: 1,
+          });
+
+          if (!user.openaiApiKey) {
+            return res.status(400).json({ message: "OpenAI API key not set" });
+          }
+
+          const openai = new OpenAI({ apiKey: user.openaiApiKey });
           const recordingPath = path.join(RECORDINGS_DIR, project.recordingUrl);
+
           try {
             await fs.promises.access(recordingPath, fs.constants.R_OK);
           } catch (error) {
@@ -1202,7 +1252,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
           }
 
-          // Convert to MP3 for processing
+          // Convert to MP3 for Whisper
           mp3FilePath = path.join(RECORDINGS_DIR, `temp_${Date.now()}.mp3`);
           await new Promise<void>((resolve, reject) => {
             const ffmpeg = spawn("ffmpeg", [
@@ -1218,8 +1268,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
               "-af",
               "silenceremove=1:0:-50dB",
               "-y",
-              mp3FilePath!,
+              mp3FilePath,
             ]);
+
+            ffmpeg.on("error", (error) => {
+              console.error("FFmpeg process error:", error);
+              reject(new Error(`FFmpeg process failed: ${error.message}`));
+            });
+
+            ffmpeg.stdout.on("data", (data) => {
+              console.log("FFmpeg stdout:", data.toString());
+            });
 
             ffmpeg.stderr.on("data", (data) => {
               console.log("FFmpeg stderr:", data.toString());
@@ -1231,51 +1290,134 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
           });
 
-          // Get transcription using our new service
+          // Get transcription
           console.log("Starting Whisper transcription");
-          const transcriptionResult = await transcribeAudio(mp3FilePath, {
-            userId: req.user!.id,
-          });
+          const transcriptionResponse =
+            await openai.audio.transcriptions.create({
+              file: fs.createReadStream(mp3FilePath),
+              model: "whisper-1",
+            });
 
-          if (!transcriptionResult.text) {
-            throw new Error("No transcription received");
+          if (!transcriptionResponse.text) {
+            throw new Error("No transcription received from OpenAI");
           }
 
           console.log(
             "Transcription successful, length:",
-            transcriptionResult.text.length,
+            transcriptionResponse.text.length,
           );
 
-          // Generate title using our new service
-          const titleResult = await generateTitle(transcriptionResult.text, {
-            userId: req.user!.id,
+          // Format transcript with timestamps
+          const formattingResponse = await openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [
+              {
+                role: "system",
+                content: `Format the transcript with only these elements:
+1. Chapter Headers:
+   - Identify key topic changes and sections
+   - Format as: "# Topic Title"
+   - Place at natural topic transitions
+2. Regular Timestamps:
+   - Add timestamps [HH:MM:SS.mmm] every 10-15 seconds
+   - Place at natural speech breaks
+   - Keep timestamps sequential
+3. Speaker labels / Turn detection:
+   - Add speaker labels above each timestamped section (i.e. "Speaker 1, speaker 2, etc.")
+   - If there is only one speaker, do not add speaker labels
+   - put the timestamp ans speaker label on a new line above the transcript section they represent
+
+Format Rules:
+- Be sure to send back all of the text
+- Detect speakers and indicate when the speaker changes
+- Always start at the beginning of the recording at 00:00:00
+- Each timestamp must be in [HH:MM:SS.mmm] format
+- Begin with a chapter header
+- Do not add intro or additional formatting
+- Add timestamps every 10-15 seconds
+- Preserve original text content exactly`,
+              },
+              {
+                role: "user",
+                content: transcriptionResponse.text,
+              },
+            ],
+            temperature: 0,
+            max_tokens: 8000,
           });
 
-          // Generate insights using our new service
-          const insightResult = await generateInsights(transcriptionResult.text, {
+          if (!formattingResponse.choices[0]?.message?.content) {
+            throw new Error("No formatted transcript generated");
+          }
+
+          const formattedTranscript =
+            formattingResponse.choices[0].message.content.trim();
+
+          // Generate title
+          const titleResponse = await openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Generate a clear, concise title (max 60 chars) based on the transcript content. Do not insert any additional formatting or punctuation",
+              },
+              {
+                role: "user",
+                content: formattedTranscript,
+              },
+            ],
+            temperature: 0.7,
+            max_tokens: 60,
+          });
+
+          if (!titleResponse.choices[0]?.message?.content) {
+            throw new Error("No title generated");
+          }
+
+          const title = titleResponse.choices[0].message.content.trim();
+
+          // Use createChatCompletion for insights with consolidated prompts
+          const summaryResponse = await createChatCompletion({
             userId: req.user!.id,
+            message: formattedTranscript,
             context: {
               projectId,
+              transcription: formattedTranscript,
               note: project.note?.content || "",
-            }
+            },
+            promptType: "primary",
           });
 
-          // Extract tasks using our new service
-          const tasks = await extractTasks(transcriptionResult.text, {
+          const summary = summaryResponse.message.trim();
+
+          // Use createChatCompletion for tasks with consolidated prompts
+          const taskResponse = await createChatCompletion({
             userId: req.user!.id,
+            message: formattedTranscript,
             context: {
               projectId,
-              note: project.note?.content || "",
-            }
+              transcription: formattedTranscript,
+              summary,
+            },
+            promptType: "todo",
           });
 
-          // Process tasks if we have valid ones
-          if (tasks && tasks.length > 0) {
+          const taskContent = taskResponse.message.trim();
+
+          // Only process tasks if we have valid content
+          if (!isEmptyTaskResponse(taskContent)) {
+            const tasks = taskContent
+              .split("\n")
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .filter((line) => !isEmptyTaskResponse(line));
+
             for (const task of tasks) {
-              if (task.text && !(await isDuplicateTask(task.text, projectId))) {
+              if (!(await isDuplicateTask(task, projectId))) {
                 await db.insert(todos).values({
                   projectId,
-                  text: task.text,
+                  text: task,
                   completed: false,
                   createdAt: new Date(),
                   updatedAt: new Date(),
@@ -1288,13 +1430,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const [updatedProject] = await db
             .update(projects)
             .set({
-              title: titleResult.title,
-              transcription: transcriptionResult.text,
-              summary: insightResult.content,
+              title,
+              transcription: formattedTranscript,
+              summary,
               updatedAt: new Date(),
             })
             .where(eq(projects.id, projectId))
             .returning();
+
+          // Clean up any empty tasks
+          await cleanupEmptyTasks(projectId);
 
           res.json(updatedProject);
         } catch (error) {
@@ -1760,16 +1905,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.error("Error during route registration:", error);
     throw error; // Let the main error handler deal with it
   }
-}
-
-async function isDuplicateTask(taskText: string, projectId: number): Promise<boolean> {
-  const existingTasks = await db.query.todos.findMany({
-    where: and(
-      eq(todos.projectId, projectId),
-      eq(todos.text, taskText),
-    ),
-  });
-  return existingTasks.length > 0;
 }
 
 function getContentType(filename: string): string {

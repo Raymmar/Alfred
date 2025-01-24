@@ -2,7 +2,7 @@ import { pgTable, text, serial, timestamp, integer, boolean } from "drizzle-orm/
 import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
-import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
+import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT } from "@/lib/constants";
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -18,9 +18,6 @@ export const settings = pgTable("settings", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
   openAiKey: text("openai_api_key"),
-  insightPrompt: text("insight_prompt").default(DEFAULT_PRIMARY_PROMPT),
-  todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
-  systemPrompt: text("system_prompt").default(DEFAULT_SYSTEM_PROMPT),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -73,17 +70,19 @@ export const chats = pgTable("chats", {
   timestamp: timestamp("timestamp").notNull().defaultNow(),
 });
 
-// Define embeddings table without vector type for now
+// Define a custom vector type for pgvector
+const vector = (size: number) => text("embedding").notNull().$type(`vector(${size})`);
+
 export const embeddings = pgTable("embeddings", {
   id: serial("id").primaryKey(),
   contentType: text("content_type").notNull(),
   contentId: integer("content_id").notNull(),
   contentText: text("content_text").notNull(),
-  embedding: text("embedding").notNull(),  // Store as JSON string for now
+  embedding: vector(384),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
-// Relations definitions
+// Relations
 export const userRelations = relations(users, ({ many, one }) => ({
   projects: many(projects),
   settings: one(settings, {
@@ -144,7 +143,25 @@ export const chatRelations = relations(chats, ({ one }) => ({
   }),
 }));
 
+export const embeddingsRelations = relations(embeddings, ({ one }) => ({
+  project: one(projects, {
+    fields: [embeddings.contentId],
+    references: [projects.id],
+    relationName: "project_embeddings",
+  }),
+  chat: one(chats, {
+    fields: [embeddings.contentId],
+    references: [chats.id],
+    relationName: "chat_embeddings",
+  }),
+  todo: one(todos, {
+    fields: [embeddings.contentId],
+    references: [todos.id],
+    relationName: "todo_embeddings",
+  }),
+}));
 
+// Schema exports
 export const insertUserSchema = createInsertSchema(users);
 export const selectUserSchema = createSelectSchema(users);
 export type InsertUser = typeof users.$inferInsert;

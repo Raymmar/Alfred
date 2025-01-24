@@ -4,9 +4,9 @@ import { useToast } from './use-toast';
 
 type UserSettings = {
   openaiApiKey?: string;
-  insightPrompt?: string;
+  defaultPrompt?: string;
   todoPrompt?: string;
-  systemPrompt?: string;
+  systemPrompt?: string; // Added new field for chat system prompt
 };
 
 type RequestResult = {
@@ -53,6 +53,18 @@ export function useSettings() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
+  console.log('useSettings hook render', {
+    hasUser: !!user,
+    userData: user ? {
+      id: user.id,
+      username: user.username,
+      hasOpenAiKey: !!user.openaiApiKey,
+      hasDefaultPrompt: !!user.defaultPrompt,
+      hasTodoPrompt: !!user.todoPrompt,
+      hasSystemPrompt: !!user.systemPrompt // Added log for new field
+    } : null
+  });
+
   const updateSettingsMutation = useMutation({
     mutationFn: updateSettings,
     onSuccess: () => {
@@ -72,13 +84,18 @@ export function useSettings() {
     },
   });
 
-  // Return settings from user object
+  // Return actual settings values instead of empty strings when user exists
   const settings = user ? {
     openaiApiKey: user.openaiApiKey ?? '',
-    insightPrompt: user.insightPrompt ?? '',
+    defaultPrompt: user.defaultPrompt ?? '',
     todoPrompt: user.todoPrompt ?? '',
-    systemPrompt: user.systemPrompt ?? '',
+    systemPrompt: user.systemPrompt ?? '', // Added new field
   } : null;
+
+  console.log('useSettings returning', {
+    hasSettings: !!settings,
+    isUpdating: updateSettingsMutation.isPending
+  });
 
   return {
     settings,
