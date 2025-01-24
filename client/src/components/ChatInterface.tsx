@@ -24,13 +24,29 @@ function isSpecializedContent(message: Message): boolean {
 
   // Check for common patterns that indicate specialized content
   const specializedPatterns = [
-    /^#\s+transcript:/i,     // Transcript headers
-    /^#\s+summary:/i,        // Summary headers
-    /^#\s+insights:/i,       // Insight headers
-    /^\[\d{2}:\d{2}:\d{2}\]/, // Timestamp patterns
-    /^task:/i,               // Task markers
-    /^todo:/i,               // Todo markers
-    /^•\s+action item:/i,    // Action items
+    // Transcript patterns
+    /^#\s+transcript:/i,
+    /^\[\d{2}:\d{2}:\d{2}\]/,   // Timestamp markers
+    /^speaker\s+\d+:/i,          // Speaker identification
+
+    // Summary and insight patterns
+    /^#\s+summary:/i,
+    /^#\s+insights:/i,
+    /^key\s+points:/i,
+    /^main\s+themes:/i,
+
+    // Task-related patterns
+    /^task:/i,
+    /^todo:/i,
+    /^•\s+action item:/i,
+    /^action items:/i,
+    /^deliverable:/i,
+    /^next steps:/i,
+
+    // Project-specific patterns
+    /^project notes:/i,
+    /^recording analysis:/i,
+    /^meeting summary:/i
   ];
 
   return specializedPatterns.some(pattern => pattern.test(content));
@@ -65,12 +81,6 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
   const { data: messages = [] } = useQuery<Message[]>({
     queryKey: messagesQueryKey,
     queryFn: async () => {
-      console.log('Fetching messages:', {
-        userId: user?.id,
-        projectId,
-        endpoint: projectId ? `/api/projects/${projectId}/messages` : '/api/messages'
-      });
-
       const response = await fetch(
         projectId ? `/api/projects/${projectId}/messages` : '/api/messages',
         {
