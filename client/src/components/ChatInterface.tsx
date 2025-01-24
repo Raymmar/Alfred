@@ -16,42 +16,6 @@ interface Message {
   userId?: number;
 }
 
-// Helper function to check if a message contains specialized content
-function isSpecializedContent(message: Message): boolean {
-  if (message.role !== 'assistant') return false;
-
-  const content = message.content.toLowerCase();
-
-  // Check for common patterns that indicate specialized content
-  const specializedPatterns = [
-    // Transcript patterns
-    /^#\s+transcript:/i,
-    /^\[\d{2}:\d{2}:\d{2}\]/,   // Timestamp markers
-    /^speaker\s+\d+:/i,          // Speaker identification
-
-    // Summary and insight patterns
-    /^#\s+summary:/i,
-    /^#\s+insights:/i,
-    /^key\s+points:/i,
-    /^main\s+themes:/i,
-
-    // Task-related patterns
-    /^task:/i,
-    /^todo:/i,
-    /^•\s+action item:/i,
-    /^action items:/i,
-    /^deliverable:/i,
-    /^next steps:/i,
-
-    // Project-specific patterns
-    /^project notes:/i,
-    /^recording analysis:/i,
-    /^meeting summary:/i
-  ];
-
-  return specializedPatterns.some(pattern => pattern.test(content));
-}
-
 export interface ChatInterfaceProps {
   className?: string;
   projectId?: number;
@@ -81,6 +45,12 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
   const { data: messages = [] } = useQuery<Message[]>({
     queryKey: messagesQueryKey,
     queryFn: async () => {
+      console.log('Fetching messages:', {
+        userId: user?.id,
+        projectId,
+        endpoint: projectId ? `/api/projects/${projectId}/messages` : '/api/messages'
+      });
+
       const response = await fetch(
         projectId ? `/api/projects/${projectId}/messages` : '/api/messages',
         {
@@ -93,6 +63,12 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
       }
 
       const data = await response.json();
+      console.log('Received messages:', {
+        userId: user?.id,
+        messageCount: data.length,
+        projectId
+      });
+
       return data;
     },
     enabled: !!user,
@@ -195,14 +171,11 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
     }
   };
 
-  // Filter out specialized content messages
-  const chatMessages = messages.filter(message => !isSpecializedContent(message));
-
   return (
     <div className={cn("flex flex-col h-full", className)}>
       <ScrollArea ref={scrollAreaRef} className="flex-1 p-2">
         <div className="space-y-4">
-          {chatMessages.map((message, i) => (
+          {messages.map((message, i) => (
             <div
               key={`${message.role}-${message.timestamp}-${i}`}
               className={cn(
@@ -223,7 +196,7 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
               />
             </div>
           ))}
-          {chatMessages.length === 0 && (
+          {messages.length === 0 && (
             <div className="text-center text-muted-foreground">
               {selectedProject 
                 ? "Ask me anything about this recording..."
