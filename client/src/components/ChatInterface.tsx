@@ -16,6 +16,26 @@ interface Message {
   userId?: number;
 }
 
+// Helper function to check if a message contains specialized content
+function isSpecializedContent(message: Message): boolean {
+  if (message.role !== 'assistant') return false;
+
+  const content = message.content.toLowerCase();
+
+  // Check for common patterns that indicate specialized content
+  const specializedPatterns = [
+    /^#\s+transcript:/i,     // Transcript headers
+    /^#\s+summary:/i,        // Summary headers
+    /^#\s+insights:/i,       // Insight headers
+    /^\[\d{2}:\d{2}:\d{2}\]/, // Timestamp patterns
+    /^task:/i,               // Task markers
+    /^todo:/i,               // Todo markers
+    /^•\s+action item:/i,    // Action items
+  ];
+
+  return specializedPatterns.some(pattern => pattern.test(content));
+}
+
 export interface ChatInterfaceProps {
   className?: string;
   projectId?: number;
@@ -63,12 +83,6 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
       }
 
       const data = await response.json();
-      console.log('Received messages:', {
-        userId: user?.id,
-        messageCount: data.length,
-        projectId
-      });
-
       return data;
     },
     enabled: !!user,
@@ -171,11 +185,14 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
     }
   };
 
+  // Filter out specialized content messages
+  const chatMessages = messages.filter(message => !isSpecializedContent(message));
+
   return (
     <div className={cn("flex flex-col h-full", className)}>
       <ScrollArea ref={scrollAreaRef} className="flex-1 p-2">
         <div className="space-y-4">
-          {messages.map((message, i) => (
+          {chatMessages.map((message, i) => (
             <div
               key={`${message.role}-${message.timestamp}-${i}`}
               className={cn(
@@ -196,7 +213,7 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
               />
             </div>
           ))}
-          {messages.length === 0 && (
+          {chatMessages.length === 0 && (
             <div className="text-center text-muted-foreground">
               {selectedProject 
                 ? "Ask me anything about this recording..."

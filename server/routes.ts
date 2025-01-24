@@ -487,6 +487,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   content: message.trim(),
                   projectId: null,
                   timestamp: new Date(),
+                  contentType: "chat", // Explicitly set content type for regular chat
                 })
                 .returning();
 
@@ -503,6 +504,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   content: aiResponse.message,
                   projectId: null,
                   timestamp: new Date(),
+                  contentType: "chat", // Explicitly set content type for regular chat
                 })
                 .returning();
 
@@ -596,6 +598,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               role: "user",
               content: message.trim(),
               timestamp: new Date(),
+              contentType: "chat", // Explicitly set content type for project chat
             })
             .returning();
 
@@ -616,6 +619,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               role: "assistant",
               content: aiResponse.message,
               timestamp: new Date(),
+              contentType: "chat", // Explicitly set content type for project chat
             })
             .returning();
 
@@ -1318,7 +1322,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
    - Identify key topic changes and sections
    - Format as: "# Topic Title"
    - Place at natural topic transitions
-2. Regular Timestamps:
+1. Regular Timestamps:
    - Add timestamps [HH:MM:SS.mmm] every 10-15 seconds
    - Place at natural speech breaks
    - Keep timestamps sequential

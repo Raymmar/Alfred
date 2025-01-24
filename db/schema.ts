@@ -68,6 +68,7 @@ export const chats = pgTable("chats", {
   role: text("role").notNull(),
   content: text("content").notNull(),
   timestamp: timestamp("timestamp").notNull().defaultNow(),
+  contentType: text("content_type").default("chat"),  // Add content type column
 });
 
 // Define a custom vector type for pgvector
