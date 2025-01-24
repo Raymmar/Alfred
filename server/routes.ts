@@ -2,15 +2,8 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import {
-  projects,
-  users,
-  todos,
-  notes,
-  chats,
-  kanbanColumns
-} from "@db/schema";
-import { desc, eq, and, asc, or } from "drizzle-orm";
+import { projects, users, todos, notes, chats, kanbanColumns } from "@db/schema";
+import { desc, eq, and, asc } from "drizzle-orm";
 import formidable from "formidable";
 import { spawn } from "child_process";
 import express from "express";
@@ -400,6 +393,199 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
 
     setupAuth(app);
+    // System Chat Endpoint
+    app.get("/api/chat/system", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const messages = await db.query.chats.findMany({
+          where: and(
+            eq(chats.userId, req.user!.id),
+            eq(chats.projectId, null)
+          ),
+          orderBy: asc(chats.timestamp),
+        });
+        res.json(messages);
+      } catch (error: any) {
+        console.error("Error fetching system chat messages:", error);
+        res.status(500).json({ message: "Failed to fetch messages" });
+      }
+    });
+
+    app.post("/api/chat/system", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const { message } = req.body;
+
+        if (typeof message !== "string" || !message.trim()) {
+          return res.status(400).json({ message: "Invalid message" });
+        }
+
+        const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
+          const [userMsg] = await tx.insert(chats).values({
+            userId: req.user!.id,
+            role: "user",
+            content: message.trim(),
+            projectId: null,
+            timestamp: new Date(),
+          }).returning();
+
+          const aiResponse = await createChatCompletion({
+            userId: req.user!.id,
+            message: message.trim(),
+            promptType: 'system'
+          });
+
+          const [assistantMsg] = await tx.insert(chats).values({
+            userId: req.user!.id,
+            role: "assistant",
+            content: aiResponse.message,
+            projectId: null,
+            timestamp: new Date(),
+          }).returning();
+
+          return [userMsg, assistantMsg];
+        });
+
+        res.json({
+          message: assistantMessage.content,
+          messages: [userMessage, assistantMessage]
+        });
+
+      } catch (error: any) {
+        console.error("System chat error:", error);
+        res.status(500).json({
+          message: error.message || "Failed to generate response",
+        });
+      }
+    });
+
+    // Insights Chat Endpoint
+    app.get("/api/chat/insights", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const messages = await db.query.chats.findMany({
+          where: and(
+            eq(chats.userId, req.user!.id),
+            eq(chats.projectId, null)
+          ),
+          orderBy: asc(chats.timestamp),
+        });
+        res.json(messages);
+      } catch (error: any) {
+        console.error("Error fetching insights chat messages:", error);
+        res.status(500).json({ message: "Failed to fetch messages" });
+      }
+    });
+
+    app.post("/api/chat/insights", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const { message } = req.body;
+
+        if (typeof message !== "string" || !message.trim()) {
+          return res.status(400).json({ message: "Invalid message" });
+        }
+
+        const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
+          const [userMsg] = await tx.insert(chats).values({
+            userId: req.user!.id,
+            role: "user",
+            content: message.trim(),
+            projectId: null,
+            timestamp: new Date(),
+          }).returning();
+
+          const aiResponse = await createChatCompletion({
+            userId: req.user!.id,
+            message: message.trim(),
+            promptType: 'primary'
+          });
+
+          const [assistantMsg] = await tx.insert(chats).values({
+            userId: req.user!.id,
+            role: "assistant",
+            content: aiResponse.message,
+            projectId: null,
+            timestamp: new Date(),
+          }).returning();
+
+          return [userMsg, assistantMsg];
+        });
+
+        res.json({
+          message: assistantMessage.content,
+          messages: [userMessage, assistantMessage]
+        });
+
+      } catch (error: any) {
+        console.error("Insights chat error:", error);
+        res.status(500).json({
+          message: error.message || "Failed to generate response",
+        });
+      }
+    });
+
+    // Tasks Chat Endpoint
+    app.get("/api/chat/tasks", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const messages = await db.query.chats.findMany({
+          where: and(
+            eq(chats.userId, req.user!.id),
+            eq(chats.projectId, null)
+          ),
+          orderBy: asc(chats.timestamp),
+        });
+        res.json(messages);
+      } catch (error: any) {
+        console.error("Error fetching tasks chat messages:", error);
+        res.status(500).json({ message: "Failed to fetch messages" });
+      }
+    });
+
+    app.post("/api/chat/tasks", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const { message } = req.body;
+
+        if (typeof message !== "string" || !message.trim()) {
+          return res.status(400).json({ message: "Invalid message" });
+        }
+
+        const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
+          const [userMsg] = await tx.insert(chats).values({
+            userId: req.user!.id,
+            role: "user",
+            content: message.trim(),
+            projectId: null,
+            timestamp: new Date(),
+          }).returning();
+
+          const aiResponse = await createChatCompletion({
+            userId: req.user!.id,
+            message: message.trim(),
+            promptType: 'todo'
+          });
+
+          const [assistantMsg] = await tx.insert(chats).values({
+            userId: req.user!.id,
+            role: "assistant",
+            content: aiResponse.message,
+            projectId: null,
+            timestamp: new Date(),
+          }).returning();
+
+          return [userMsg, assistantMsg];
+        });
+
+        res.json({
+          message: assistantMessage.content,
+          messages: [userMessage, assistantMessage]
+        });
+
+      } catch (error: any) {
+        console.error("Tasks chat error:", error);
+        res.status(500).json({
+          message: error.message || "Failed to generate response",
+        });
+      }
+    });
+
+    // Keep existing /api/messages and /api/chat endpoints for backward compatibility
     app.get("/api/messages", requireAuth, async (req: AuthRequest, res: Response) => {
         try {
           const messages = await db.query.chats.findMany({
@@ -764,8 +950,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Single file upload (small recordings)
         if (!file.size || file.size === 0) {
           console.error('Empty recording file received');
-          await fs.promises.unlink(file.filepath).catch(err => 
-            console.error('Failed to cleanup empty file:', err)
+          await fs.promises.unlink(file.filepath).catch(err =>            console.error('Failed to cleanup empty file:', err)
           );
           return res.status(400).json({
             message: "Empty recording",
@@ -1703,15 +1888,14 @@ Format Rules:
       });
     });
     app.get("/api/user", (req: AuthRequest, res: Response) => {
-      if (req.isAuthenticated()) {
-        return res.json(req.user);
+      if (req.isAuthenticated()) {        return res.json(req.user);
       }
       res.status(401).send("Not logged in");
     });
     return httpServer;
   } catch (error) {
     console.error("Error during route registration:", error);
-    throw error; // Let the main error handler deal with it
+        throw error; // Let the main error handler deal with it
   }
 }
 

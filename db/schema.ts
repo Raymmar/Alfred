@@ -2,7 +2,7 @@ import { pgTable, text, serial, timestamp, integer, boolean } from "drizzle-orm/
 import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
-import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT } from "@/lib/constants";
+import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -67,6 +67,7 @@ export const chats = pgTable("chats", {
   projectId: integer("project_id").references(() => projects.id, { onDelete: 'cascade' }),
   role: text("role").notNull(),
   content: text("content").notNull(),
+  chatType: text("chat_type").notNull().default('system'),
   timestamp: timestamp("timestamp").notNull().defaultNow(),
 });
 
