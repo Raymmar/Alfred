@@ -24,7 +24,7 @@ interface TaskItemProps {
   setEditingTaskId?: (id: number | null) => void;
   nextTaskId?: number | null;
   onTabToNext?: () => void;
-  onRecordingClick?: (projectId: number) => void;
+  onRecordingClick?: ((projectId: number) => void) | undefined;
 }
 
 export function TaskItem({
