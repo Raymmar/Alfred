@@ -137,17 +137,6 @@ export function RecordingDetailsModal({ project, open, onOpenChange, defaultTab 
                   maintainOrder 
                   className="w-full"
                   projectId={currentProject.id}
-                  onRecordingClick={(projectId) => {
-                    const projects = queryClient.getQueryData<ProjectWithTodos[]>(['projects']);
-                    const newProject = projects?.find(p => p.id === projectId);
-                    if (newProject && projectId !== currentProject.id) {
-                      onOpenChange(false);
-                      setTimeout(() => {
-                        onOpenChange(true);
-                        queryClient.setQueryData(['projects', projectId], newProject);
-                      }, 100);
-                    }
-                  }}
                 />
               </div>
             </ScrollArea>

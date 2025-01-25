@@ -43,10 +43,9 @@ export interface TaskListProps {
   className?: string;
   maintainOrder?: boolean;
   projectId?: number;
-  onRecordingClick?: (projectId: number) => void;
 }
 
-export function TaskList({ className = "", maintainOrder = false, projectId, onRecordingClick }: TaskListProps) {
+export function TaskList({ className = "", maintainOrder = false, projectId }: TaskListProps) {
   const { todos = [], isLoading, error } = useKanban();
   const { handleStatusChange, handleEdit, handleDelete, handleBatchDelete, handleBatchStatusChange, getTasksAsMarkdown } = useTaskOperations();
   const { toast } = useToast();
@@ -209,7 +208,6 @@ export function TaskList({ className = "", maintainOrder = false, projectId, onR
           }
           setSelectedTodos(newSelectedTodos);
         }}
-        onRecordingClick={onRecordingClick}
       />
     );
   };
