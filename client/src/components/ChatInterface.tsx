@@ -229,23 +229,31 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
-      <form onSubmit={handleSubmit} className="p-2 flex gap-2">
+      <form onSubmit={(e) => {
+        handleSubmit(e);
+        if (inputRef.current) {
+          inputRef.current.style.height = '40px';
+        }
+      }} className="p-2 flex gap-2 items-end">
         <Textarea
           ref={inputRef}
           value={input}
           onChange={(e) => {
             setInput(e.target.value);
-            e.target.style.height = 'auto';
+            e.target.style.height = '40px';
             e.target.style.height = `${e.target.scrollHeight}px`;
           }}
           placeholder="Type your message..."
-          className="flex-1 min-h-[40px] resize-none py-2 overflow-y-auto"
+          className="flex-1 min-h-[40px] max-h-[160px] resize-none py-2 overflow-y-auto"
           disabled={isLoading}
           rows={1}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
               handleSubmit(e);
+              if (inputRef.current) {
+                inputRef.current.style.height = '40px';
+              }
             }
           }}
         />
@@ -253,6 +261,7 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
           type="submit" 
           size="icon"
           disabled={!input.trim() || isLoading}
+          className="mb-[1px]"
         >
           <Send className="h-4 w-4" />
         </Button>
