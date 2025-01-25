@@ -136,6 +136,12 @@ export function useAudioProcessing() {
         queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
         queryClient.invalidateQueries({ queryKey: ['projects'] });
         queryClient.invalidateQueries({ queryKey: ['todos'] });
+        
+        // Clear chat history after processing
+        const userId = queryClient.getQueryData(['user'])?.id;
+        if (userId) {
+          queryClient.setQueryData(['messages', userId], []);
+        }
       }
     },
   });
