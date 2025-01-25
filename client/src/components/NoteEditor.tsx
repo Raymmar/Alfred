@@ -214,11 +214,20 @@ export function NoteEditor({
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Properly type the project data
+  // Fetch project data first
   const { data: project } = useQuery<SelectProject>({
-    queryKey: projectId ? ["/api/projects", projectId] as const : [],
+    queryKey: projectId ? ["projects", projectId] : null,
+    queryFn: async ({ queryKey: [_, id] }) => {
+      if (!id) return null;
+      const response = await fetch(`/api/projects/${id}`);
+      if (!response.ok) {
+        throw new Error("Failed to fetch project");
+      }
+      const data = await response.json();
+      return data;
+    },
     enabled: !!projectId,
-    staleTime: 0,
+    staleTime: 0, // Always refetch when tab changes
   });
 
   const { content, setContent, isLoading, isSaving } = useNotes({
@@ -474,11 +483,7 @@ export function NoteEditor({
                       <TranscriptViewer
                         transcript={project.transcription}
                         currentTime={currentTime}
-                        onSegmentClick={(start, end) => {
-                          if (onTranscriptSegmentSelect) {
-                            onTranscriptSegmentSelect(start, end);
-                          }
-                        }}
+                        onSegmentClick={onTranscriptSegmentSelect}
                         className="h-full"
                       />
                     ) : (

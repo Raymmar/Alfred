@@ -19,16 +19,9 @@ interface Message {
 export interface ChatInterfaceProps {
   className?: string;
   projectId?: number;
-  onClearChat?: () => void;
-  clearTrigger?: number; // New prop to trigger chat clearing
 }
 
-export function ChatInterface({ 
-  className, 
-  projectId, 
-  onClearChat,
-  clearTrigger = 0 
-}: ChatInterfaceProps) {
+export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -49,7 +42,7 @@ export function ChatInterface({
 
   const chatEndpoint = projectId ? `/api/projects/${projectId}/chat` : '/api/chat';
 
-  const { data: messages = [], refetch } = useQuery<Message[]>({
+  const { data: messages = [] } = useQuery<Message[]>({
     queryKey: messagesQueryKey,
     queryFn: async () => {
       console.log('Fetching messages:', {
@@ -86,16 +79,6 @@ export function ChatInterface({
     refetchOnMount: true,
     refetchOnReconnect: false,
   });
-
-  // Clear chat when clearTrigger changes
-  useEffect(() => {
-    if (clearTrigger > 0) {
-      queryClient.setQueryData<Message[]>(messagesQueryKey, []);
-      if (onClearChat) {
-        onClearChat();
-      }
-    }
-  }, [clearTrigger, queryClient, messagesQueryKey, onClearChat]);
 
   const scrollToBottom = () => {
     if (messagesEndRef.current) {
