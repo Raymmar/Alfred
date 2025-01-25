@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, Send, Trash2 } from "lucide-react";
+import { Loader2, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useProjects } from "@/hooks/use-projects";
 import { cn } from "@/lib/utils";
@@ -92,14 +92,6 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
     }
   };
 
-  const clearChat = () => {
-    queryClient.setQueryData<Message[]>(messagesQueryKey, []);
-    toast({
-      title: "Chat Cleared",
-      description: "The chat view has been cleared. Your message history is still preserved.",
-    });
-  };
-
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
@@ -181,22 +173,6 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
 
   return (
     <div className={cn("flex flex-col h-full", className)}>
-      <div className="flex justify-between items-center pb-2 px-2">
-        <h2 className="text-lg font-semibold">
-          {selectedProject 
-            ? `Chat - ${selectedProject.title}`
-            : "Chat"}
-        </h2>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-muted-foreground hover:text-destructive"
-          onClick={clearChat}
-        >
-          <Trash2 className="h-4 w-4 mr-2" />
-          Clear Chat
-        </Button>
-      </div>
       <ScrollArea ref={scrollAreaRef} className="flex-1 p-2">
         <div className="space-y-4">
           {messages.map((message, i) => (
