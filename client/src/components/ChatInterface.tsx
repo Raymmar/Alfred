@@ -184,9 +184,10 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
             size="sm"
             onClick={handleClearChat}
             disabled={isLoading}
-            className="h-6 px-2 text-xs bg-background/80 backdrop-blur-sm hover:bg-background/90 shadow-sm"
+            className="h-6 w-6 group bg-background/80 backdrop-blur-sm hover:w-[85px] hover:px-2 transition-[width,padding] duration-200 shadow-sm overflow-hidden"
           >
-            Clear Chat
+            <X className="h-3 w-3" />
+            <span className="ml-1 text-xs opacity-0 group-hover:opacity-100 absolute left-6">Clear</span>
           </Button>
         </div>
       )}
