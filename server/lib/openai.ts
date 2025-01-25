@@ -159,14 +159,14 @@ interface ChatOptions {
     projectId?: number;
     note?: string | null;
   };
-  promptType?: 'primary' | 'todo' | 'system' | 'chat';
+  promptType?: 'primary' | 'todo' | 'system';
 }
 
 export async function createChatCompletion({
   userId,
   message,
   context,
-  promptType = 'chat'
+  promptType = 'system'
 }: ChatOptions) {
   const user = await db.query.users.findFirst({
     where: eq(users.id, userId),
@@ -186,7 +186,7 @@ export async function createChatCompletion({
     throw new Error("OpenAI API key not found. Please add your API key in settings.");
   }
 
-  // Use user's custom prompts or fall back to defaults based on prompt type
+  // Use user's custom prompts or fall back to defaults
   const primaryPrompt = userSettings?.defaultPrompt || DEFAULT_PRIMARY_PROMPT;
   const todoPrompt = userSettings?.todoPrompt || DEFAULT_TODO_PROMPT;
   const systemPrompt = userSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT;
@@ -195,55 +195,76 @@ export async function createChatCompletion({
     apiKey,
   });
 
-  // Only fetch enhanced context for non-chat interactions
-  let enhancedContext = [];
-  let similarityScore = 0;
-  let recommendedTasks = [];
+  const userData = await getContextData(userId);
+  const { enhancedContext, similarityScore } = await updateChatContext(userId, message);
 
-  if (promptType !== 'chat') {
-    const userData = await getContextData(userId);
-    const contextResult = await updateChatContext(userId, message);
-    enhancedContext = contextResult.enhancedContext;
-    similarityScore = contextResult.similarityScore;
+  const { recommendations: recommendedTasks } = await findRecommendedTasks(userId, message, {
+    limit: 5,
+    minSimilarity: 0.5,
+    includeCompleted: false
+  });
 
-    const taskResults = await findRecommendedTasks(userId, message, {
-      limit: 5,
-      minSimilarity: 0.5,
-      includeCompleted: false
-    });
-    recommendedTasks = taskResults.recommendations;
-  }
+  // Select the appropriate prompt based on the promptType
+  const basePrompt = promptType === 'todo' 
+    ? todoPrompt 
+    : promptType === 'primary'
+      ? primaryPrompt 
+      : systemPrompt;
 
-  // Select the appropriate prompt and build system message
-  let systemMessage;
-  if (promptType === 'chat') {
-    // For direct chat, use a simple system message without additional context
-    systemMessage = `You are Alfred, an intelligent personal assistant. Keep your responses clear, concise, and focused on direct conversation with the user. Do not generate tasks or insights unless specifically asked.`;
-  } else {
-    // For other types, use the full context-aware system message
-    const basePrompt = promptType === 'todo' 
-      ? todoPrompt 
-      : promptType === 'primary'
-        ? primaryPrompt 
-        : systemPrompt;
+  // Build system message with enhanced contextual awareness and selected prompt
+  let systemMessage = `${basePrompt}\n\nDatabase Context:
+Total Projects: ${userData.totalProjects}
+Total Recordings: ${userData.totalRecordings}
+Total Tasks: ${userData.totalTodos} (${userData.totalCompletedTodos} completed)
 
-    systemMessage = `${basePrompt}\n\n${
-      promptType !== 'chat' ? formatContextForPrompt(enhancedContext) : ''
-    }`;
+${userData.latestRecording ? `Latest Recording:
+Title: "${userData.latestRecording.title}"
+Created: ${userData.latestRecording.createdAt.toLocaleString()}
+Has Transcription: ${!!userData.latestRecording.transcription}
+Has Summary: ${!!userData.latestRecording.summary}
+${userData.latestRecording.transcription ? `\nTranscription Preview:\n${userData.latestRecording.transcription.substring(0, 500)}...` : ''}
+${userData.latestRecording.summary ? `\nSummary:\n${userData.latestRecording.summary}` : ''}
+` : 'No recordings available.'}
 
-    if (context?.projectId) {
-      const userData = await getContextData(userId);
-      const projectContext = userData.projects.find(p => p.id === context.projectId);
-      if (projectContext) {
-        systemMessage += `\n\nFocused Project Context:
+Available Projects and Recordings:
+${userData.projects.map(p => `
+Project: "${p.title}" (Created: ${p.createdAt.toLocaleString()})
+Type: ${p.isRecording ? 'Recording' : 'Project'}
+${p.description ? `Description: ${p.description}` : ''}
+${p.transcription ? `Has Transcription: Yes\nTranscription Preview:\n${p.transcription.substring(0, 300)}...` : ''}
+${p.summary ? `\nSummary:\n${p.summary}` : ''}
+Tasks (${p.todoCount} total, ${p.completedTodos} completed):
+${p.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'}, Created: ${t.createdAt.toLocaleString()})`).join('\n') || 'No tasks'}
+${p.note ? `\nNotes (Last updated: ${p.note.updatedAt.toLocaleString()}):\n${p.note.content}` : ''}
+`).join('\n')}
+
+Relevant Context:
+${formatContextForPrompt(enhancedContext)}
+
+Recommended Tasks Based on Current Context:
+${recommendedTasks.length > 0
+    ? recommendedTasks.map(task =>
+      `- [${task.completed ? 'Completed' : 'Pending'}] ${task.text}${
+        task.projectTitle ? ` (Project: ${task.projectTitle})` : ''
+      }`
+    ).join('\n')
+    : 'No specifically relevant tasks found for this conversation.'}`;
+
+  // For project-specific chat, add focused context
+  if (context?.projectId) {
+    const projectContext = userData.projects.find(p => p.id === context.projectId);
+    if (projectContext) {
+      systemMessage += `\n\nFocused Project Context:
 Title: "${projectContext.title}"
 ${projectContext.description ? `Description: ${projectContext.description}\n` : ''}
 Created: ${projectContext.createdAt.toLocaleString()}
 Tasks: ${projectContext.todoCount} total (${projectContext.completedTodos} completed)
 ${projectContext.transcription ? `\nTranscription:\n${projectContext.transcription}` : ''}
 ${projectContext.summary ? `\nSummary:\n${projectContext.summary}` : ''}
-${projectContext.note ? `\nNotes:\n${projectContext.note.content}` : ''}`;
-      }
+${projectContext.note ? `\nNotes:\n${projectContext.note.content}` : ''}
+
+Current Tasks:
+${projectContext.todos?.map(t => `- ${t.text} (${t.completed ? 'Completed' : 'Pending'})`).join('\n') || 'No tasks'}`;
     }
   }
 
@@ -252,18 +273,21 @@ ${projectContext.note ? `\nNotes:\n${projectContext.note.content}` : ''}`;
       model: CHAT_MODEL,
       messages: [
         { role: "system", content: systemMessage },
-        { role: "user", content: `${promptType === 'chat' ? '' : `User's Note:\n${context?.note || 'No existing note'}\n\n`}Transcript:\n${message}` },
+        { role: "user", content: `User's Note:\n${context?.note || 'No existing note'}\n\nTranscript:\n${message}` },
       ],
-      temperature: promptType === 'chat' ? 0.7 : 0.2,
+      temperature: 0.2,
       max_tokens: 8000,
     });
 
     const assistantResponse = response.choices[0].message.content || "";
+    console.log('GPT response:', assistantResponse);
 
-    // Only convert to HTML for non-todo responses
+    // Only convert to HTML if it's not a todo prompt
     const finalResponse = promptType === 'todo'
-      ? assistantResponse
-      : convertMarkdownToHTML(assistantResponse);
+      ? assistantResponse  // Keep tasks as plain text
+      : convertMarkdownToHTML(assistantResponse); // Convert insights to HTML
+
+    console.log('Final response:', finalResponse);
 
     const [userMessage, assistantMessage] = await db.transaction(async (tx) => {
       const [userMsg] = await tx.insert(chats).values({
@@ -300,7 +324,7 @@ ${projectContext.note ? `\nNotes:\n${projectContext.note.content}` : ''}`;
 
     return {
       message: finalResponse,
-      context: promptType === 'chat' ? undefined : {
+      context: {
         similarityScore,
         contextCount: enhancedContext.length,
         recommendedTasks: recommendedTasks.length

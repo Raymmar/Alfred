@@ -10,7 +10,7 @@ import {
   chats,
   kanbanColumns,
 } from "@db/schema";
-import { desc, eq, and, asc, or } from "drizzle-orm";
+import { desc, eq, and, asc, or, sql } from "drizzle-orm";
 import formidable from "formidable";
 import { spawn } from "child_process";
 import express from "express";
@@ -26,6 +26,30 @@ import {
 import { createChatCompletion } from "./lib/openai";
 import { RequestHandler } from "express-serve-static-core";
 import OpenAI from "openai";
+
+// Add this function near the top with other helper functions
+async function cleanupProcessingChats(userId: number, projectId: number): Promise<void> {
+  try {
+    // Delete all processing-related chat messages for this project
+    await db.delete(chats)
+      .where(
+        and(
+          eq(chats.userId, userId),
+          eq(chats.projectId, projectId),
+          or(
+            sql`content LIKE '%Processing recording%'`,
+            sql`content LIKE '%Transcription complete%'`,
+            sql`content LIKE '%Generating insights%'`,
+            sql`content LIKE '%Processing complete%'`,
+            sql`content LIKE '%Analyzing audio%'`,
+            sql`content LIKE '%Starting transcription%'`
+          )
+        )
+      );
+  } catch (error) {
+    console.error('Error cleaning up processing chats:', error);
+  }
+}
 
 function isEmptyTaskResponse(text: string): boolean {
   const trimmedText = text.trim().toLowerCase();
@@ -205,6 +229,7 @@ async function cleanupEmptyTasks(projectId: number): Promise<void> {
     await db.delete(todos).where((t) => t.id.in(emptyTasks.map((t) => t.id)));
   }
 }
+
 
 // Extend Express Request type to include auth properties
 interface AuthRequest extends Request {
@@ -990,7 +1015,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             },
           });
           if (!project) {
-            return res.status(404).json({ message: "Project not found" });
+            return res.status(44).json({ message: "Project not found" });
           }
           let note;
           if (project.note) {
@@ -1000,8 +1025,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 content,
                 updatedAt: new Date(),
               })
-              .where(eq(notes.projectId, projectId))
-              .returning();
+              .where(eq(notes.projectId, projectId))              .returning();
           } else {
             [note] = await db
               .insert(notes)
@@ -1024,7 +1048,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       },
     );
     app.post(
-      "/api/settings",      requireAuth,
+      "/api/settings",
+      requireAuth,
       async (req: AuthRequest, res: Response) => {
         try {
           const { openaiApiKey, defaultPrompt, todoPrompt } = req.body;
@@ -1067,26 +1092,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
       requireAuth,
       async (req: AuthRequest, res: Response) => {
         try {
-          const { title, description, recordingUrl, initialNoteContent } =
-            req.body;
-          const [project] = await db.transaction(async (tx) => {
-            const [newProject] = await tx
-              .insert(projects)
-              .values({
-                title,
-                description,
-                recordingUrl,
-                userId: req.user!.id,
-              })
-              .returning();
-            await tx.insert(notes).values({
-              projectId: newProject.id,
-              content: initialNoteContent || "",
+          const { title, recordingUrl } = req.body;
+
+          if (typeof title !== "string" || !title.trim()) {
+            return res.status(400).json({ message: "Invalid project title" });
+          }
+
+          const [project] = await db.insert(projects)
+            .values({
+              userId: req.user!.id,
+              title: title.trim(),
+              recordingUrl: recordingUrl || null,
               createdAt: new Date(),
               updatedAt: new Date(),
+            })
+            .returning();
+
+          // For recording projects, add initial processing message
+          if (recordingUrl) {
+            await db.insert(chats).values({
+              userId: req.user!.id,
+              projectId: project.id,
+              role: "assistant",
+              content: "Processing recording...",
+              timestamp: new Date(),
             });
-            return [newProject];
-          });
+          }
+
+          // Rest of the project creation logic
+
+          // After processing is complete, clean up the processing messages
+          if (recordingUrl) {
+            await cleanupProcessingChats(req.user!.id, project.id);
+          }
+
           res.json(project);
         } catch (error: any) {
           console.error("Error creating project:", error);
@@ -1904,6 +1943,79 @@ Format Rules:
       }
       res.status(401).send("Not logged in");
     });
+    app.post("/api/projects/:projectId/transcribe", requireAuth, async (req: AuthRequest, res: Response) => {
+      try {
+        const projectId = parseInt(req.params.projectId);
+        if (isNaN(projectId)) {
+          return res.status(400).json({ message: "Invalid project ID" });
+        }
+
+        const [project] = await db.query.projects.findMany({
+          where: eq(projects.id, projectId),
+          limit: 1
+        });
+
+        if (!project) {
+          return res.status(404).json({ message: "Project not found" });
+        }
+
+        if (project.userId !== req.user!.id) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+
+        const { recordingUrl } = req.body;
+        if (!recordingUrl) {
+          return res.status(400).json({ message: 'Recording URL is required' });
+        }
+
+        const recordingPath = path.join(RECORDINGS_DIR, recordingUrl);
+        if (!fs.existsSync(recordingPath)) {
+          return res.status(404).json({ message: 'Recording file not found' });
+        }
+
+        const [user] = await db.query.users.findMany({ 
+          where: eq(users.id, req.user!.id), 
+          limit: 1 
+        });
+
+        if (!user?.openaiApiKey) {
+          return res.status(400).json({ message: 'OpenAI API key not set' });
+        }
+
+        const openai = new OpenAI({ apiKey: user.openaiApiKey });
+
+        const transcriptionResponse = await openai.audio.transcriptions.create({
+          file: fs.createReadStream(recordingPath),
+          model: "whisper-1",
+        });
+
+        const transcription = transcriptionResponse.text || '';
+
+        const aiResponse = await createChatCompletion({
+          userId: req.user!.id,
+          message: transcription,
+          context: { projectId },
+          promptType: 'primary'
+        });
+
+        await db.update(projects)
+          .set({ transcription })
+          .where(eq(projects.id, projectId));
+
+        // Clean up all processing-related messages
+        await cleanupProcessingChats(req.user!.id, projectId);
+
+        res.json({ 
+          transcription, 
+          insights: aiResponse.message 
+        });
+      } catch (error) {
+        console.error('Transcription error:', error);
+        res.status(500).json({ 
+          message: error instanceof Error ? error.message : 'Failed to transcribe recording' 
+        });
+      }
+    });
     return httpServer;
   } catch (error) {
     console.error("Error during route registration:", error);
@@ -1916,7 +2028,7 @@ function getContentType(filename: string): string {
   switch (ext) {
     case ".mp3":
       return "audio/mpeg";
-    case ".wav":
+    case`.wav":
       return "audio/wav";
     case ".ogg":
       return "audio/ogg";
