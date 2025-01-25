@@ -477,6 +477,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return res.status(400).json({ message: "Invalid message" });
           }
 
+          const aiResponse = await createChatCompletion({
+            userId: req.user!.id,
+            message: message.trim(),
+            promptType: "chat", // Explicitly set chat type for direct conversations
+          });
+
           const [userMessage, assistantMessage] = await db.transaction(
             async (tx) => {
               const [userMsg] = await tx
@@ -489,11 +495,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   timestamp: new Date(),
                 })
                 .returning();
-
-              const aiResponse = await createChatCompletion({
-                userId: req.user!.id,
-                message: message.trim(),
-              });
 
               const [assistantMsg] = await tx
                 .insert(chats)
@@ -588,36 +589,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return res.status(403).json({ message: "Not authorized" });
           }
 
-          const [userMessage] = await db
-            .insert(chats)
-            .values({
-              userId: req.user!.id,
-              projectId,
-              role: "user",
-              content: message.trim(),
-              timestamp: new Date(),
-            })
-            .returning();
-
           const aiResponse = await createChatCompletion({
             userId: req.user!.id,
             message: message.trim(),
             context: {
+              projectId,
               transcription: project.transcription,
               summary: project.summary,
             },
+            promptType: "chat", // Set chat type for project-specific conversations
           });
 
-          const [assistantMessage] = await db
-            .insert(chats)
-            .values({
-              userId: req.user!.id,
-              projectId,
-              role: "assistant",
-              content: aiResponse.message,
-              timestamp: new Date(),
-            })
-            .returning();
+          const [userMessage, assistantMessage] = await db.transaction(
+            async (tx) => {
+              const [userMsg] = await tx
+                .insert(chats)
+                .values({
+                  userId: req.user!.id,
+                  projectId,
+                  role: "user",
+                  content: message.trim(),
+                  timestamp: new Date(),
+                })
+                .returning();
+
+              const [assistantMsg] = await tx
+                .insert(chats)
+                .values({
+                  userId: req.user!.id,
+                  projectId,
+                  role: "assistant",
+                  content: aiResponse.message,
+                  timestamp: new Date(),
+                })
+                .returning();
+
+              return [userMsg, assistantMsg];
+            },
+          );
 
           res.json({
             message: aiResponse.message,
@@ -1015,8 +1024,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       },
     );
     app.post(
-      "/api/settings",
-      requireAuth,
+      "/api/settings",      requireAuth,
       async (req: AuthRequest, res: Response) => {
         try {
           const { openaiApiKey, defaultPrompt, todoPrompt } = req.body;
@@ -1318,7 +1326,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
    - Identify key topic changes and sections
    - Format as: "# Topic Title"
    - Place at natural topic transitions
-2. Regular Timestamps:
+1. Regular Timestamps:
    - Add timestamps [HH:MM:SS.mmm] every 10-15 seconds
    - Place at natural speech breaks
    - Keep timestamps sequential
