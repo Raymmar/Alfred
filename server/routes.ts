@@ -1324,8 +1324,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
    - Keep timestamps sequential
 
 Format Rules:
-- Be sure to send back all of the text
-- Detect speakers and indicate when the speaker changes
+- Be sure to send back all of the trancriipt text
 - Always start at the beginning of the recording at 00:00:00
 - Each timestamp must be in [HH:MM:SS.mmm] format
 - Begin with a chapter header
