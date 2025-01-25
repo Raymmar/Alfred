@@ -2,8 +2,9 @@ import { pgTable, text, serial, timestamp, integer, boolean } from "drizzle-orm/
 import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
-import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT } from "@/lib/constants";
+import { DEFAULT_PRIMARY_PROMPT, DEFAULT_TODO_PROMPT, DEFAULT_SYSTEM_PROMPT } from "@/lib/constants";
 
+// Keep existing table structure to match database
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").unique().notNull(),
@@ -12,6 +13,7 @@ export const users = pgTable("users", {
   defaultPrompt: text("default_prompt").default(DEFAULT_PRIMARY_PROMPT),
   todoPrompt: text("todo_prompt").default(DEFAULT_TODO_PROMPT),
   storageLocation: text("storage_location"),
+  summaryPrompt: text("summary_prompt"),
 });
 
 export const settings = pgTable("settings", {
@@ -32,6 +34,9 @@ export const projects = pgTable("projects", {
   summary: text("summary"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  processingStatus: text("processing_status"),
+  recordingSessionId: text("recording_session_id"),
+  duration: integer("duration"),
 });
 
 export const notes = pgTable("notes", {
@@ -59,6 +64,8 @@ export const todos = pgTable("todos", {
   order: integer("order").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  approved: boolean("approved"),
+  approvalExpiration: timestamp("approval_expiration"),
 });
 
 export const chats = pgTable("chats", {
