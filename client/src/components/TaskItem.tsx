@@ -40,6 +40,7 @@ export function TaskItem({
   setEditingTaskId,
   nextTaskId,
   onTabToNext,
+  onRecordingClick,
 }: TaskItemProps) {
   const {
     attributes,
