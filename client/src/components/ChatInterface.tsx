@@ -229,13 +229,20 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
         </div>
       </ScrollArea>
       <form onSubmit={handleSubmit} className="p-2 flex gap-2">
-        <Input
+        <Textarea
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Type your message..."
-          className="flex-1"
+          className="flex-1 min-h-0 h-10 resize-none py-2"
           disabled={isLoading}
+          rows={1}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              handleSubmit(e);
+            }
+          }}
         />
         <Button 
           type="submit" 
