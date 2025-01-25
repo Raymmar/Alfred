@@ -127,7 +127,6 @@ async function processAudio(projectId: number): Promise<RequestResult<SelectProj
 
 export function useAudioProcessing() {
   const queryClient = useQueryClient();
-  const user = queryClient.getQueryData(['user']) as { id: number } | undefined;
 
   const processAudioMutation = useMutation({
     mutationFn: processAudio,
@@ -137,11 +136,14 @@ export function useAudioProcessing() {
         queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
         queryClient.invalidateQueries({ queryKey: ['projects'] });
         queryClient.invalidateQueries({ queryKey: ['todos'] });
-
+        
         // Clear chat history for the processed project
-        if (result.ok && user?.id) {
+        if (result.ok) {
           const projectId = result.data.id;
-          queryClient.setQueryData(['messages', projectId, user.id], []);
+          const userId = queryClient.getQueryData(['user'])?.id;
+          if (projectId && userId) {
+            queryClient.setQueryData(['messages', projectId, userId], []);
+          }
         }
       }
     },
