@@ -233,9 +233,13 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
         <Textarea
           ref={inputRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value);
+            e.target.style.height = 'auto';
+            e.target.style.height = `${e.target.scrollHeight}px`;
+          }}
           placeholder="Type your message..."
-          className="flex-1 min-h-0 h-10 resize-none py-2"
+          className="flex-1 min-h-[40px] max-h-[160px] resize-none py-2 overflow-y-auto"
           disabled={isLoading}
           rows={1}
           onKeyDown={(e) => {
