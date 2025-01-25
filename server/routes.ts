@@ -27,6 +27,25 @@ import { createChatCompletion } from "./lib/openai";
 import { RequestHandler } from "express-serve-static-core";
 import OpenAI from "openai";
 
+interface RequestResult<T> {
+  ok: boolean;
+  data?: T;
+  message?: string;
+}
+
+interface SelectProject {
+  id: number;
+  title: string;
+  description: string;
+  recordingUrl: string;
+  userId: number;
+  createdAt: Date;
+  updatedAt: Date;
+  transcription: string;
+  summary: string;
+}
+
+
 function isEmptyTaskResponse(text: string): boolean {
   const trimmedText = text.trim().toLowerCase();
   const excludedPhrases = [
@@ -219,6 +238,40 @@ function requireAuth(req: AuthRequest, res: Response, next: Function): void {
     return;
   }
   next();
+}
+
+async function processAudio(projectId: number, transcription: string, userId: number): Promise<RequestResult<SelectProject>> {
+  try {
+    const aiResponse = await createChatCompletion({
+      userId,
+      message: `Analyze this transcript and provide key insights:
+               ${transcription}`
+    });
+
+    const [updatedProject] = await db
+      .update(projects)
+      .set({
+        summary: aiResponse.message,
+        updatedAt: new Date(),
+      })
+      .where(eq(projects.id, projectId))
+      .returning();
+
+    if (!updatedProject) {
+      return { 
+        ok: false, 
+        message: 'Failed to update project' 
+      };
+    }
+
+    return { ok: true, data: updatedProject };
+  } catch (e: any) {
+    console.error('Audio processing error:', e);
+    return { 
+      ok: false, 
+      message: e.message || 'An unexpected error occurred' 
+    };
+  }
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -1252,197 +1305,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
           }
 
-          // Convert to MP3 for Whisper
-          mp3FilePath = path.join(RECORDINGS_DIR, `temp_${Date.now()}.mp3`);
-          await new Promise<void>((resolve, reject) => {
-            const ffmpeg = spawn("ffmpeg", [
-              "-i",
-              recordingPath,
-              "-vn",
-              "-acodec",
-              "libmp3lame",
-              "-ab",
-              "128k",
-              "-ar",
-              "44100",
-              "-af",
-              "silenceremove=1:0:-50dB",
-              "-y",
-              mp3FilePath,
-            ]);
 
-            ffmpeg.on("error", (error) => {
-              console.error("FFmpeg process error:", error);
-              reject(new Error(`FFmpeg process failed: ${error.message}`));
-            });
-
-            ffmpeg.stdout.on("data", (data) => {
-              console.log("FFmpeg stdout:", data.toString());
-            });
-
-            ffmpeg.stderr.on("data", (data) => {
-              console.log("FFmpeg stderr:", data.toString());
-            });
-
-            ffmpeg.on("close", (code) => {
-              if (code === 0) resolve();
-              else reject(new Error(`FFmpeg process exited with code ${code}`));
-            });
-          });
-
-          // Get transcription
-          console.log("Starting Whisper transcription");
-          const transcriptionResponse =
-            await openai.audio.transcriptions.create({
-              file: fs.createReadStream(mp3FilePath),
-              model: "whisper-1",
-            });
-
-          if (!transcriptionResponse.text) {
-            throw new Error("No transcription received from OpenAI");
-          }
-
-          console.log(
-            "Transcription successful, length:",
-            transcriptionResponse.text.length,
+          const processResult = await processAudio(
+            projectId, 
+            project.transcription || '', 
+            req.user!.id
           );
 
-          // Format transcript with timestamps
-          const formattingResponse = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-              {
-                role: "system",
-                content: `Format the transcript with only these elements:
-1. Chapter Headers:
-   - Identify key topic changes and sections
-   - Format as: "# Topic Title"
-   - Place at natural topic transitions
-2. Regular Timestamps:
-   - Add timestamps [HH:MM:SS.mmm] every 10-15 seconds
-   - Place at natural speech breaks
-   - Keep timestamps sequential
-
-Format Rules:
-- Be sure to send back all of the text
-- Detect speakers and indicate when the speaker changes
-- Always start at the beginning of the recording at 00:00:00
-- Each timestamp must be in [HH:MM:SS.mmm] format
-- Begin with a chapter header
-- Do not add intro or additional formatting
-- Add timestamps every 10-15 seconds
-- Preserve original text content exactly`,
-              },
-              {
-                role: "user",
-                content: transcriptionResponse.text,
-              },
-            ],
-            temperature: 0,
-            max_tokens: 8000,
-          });
-
-          if (!formattingResponse.choices[0]?.message?.content) {
-            throw new Error("No formatted transcript generated");
+          if (!processResult.ok) {
+            return res.status(500).json({ message: processResult.message });
           }
 
-          const formattedTranscript =
-            formattingResponse.choices[0].message.content.trim();
+          res.json(processResult.data);
 
-          // Generate title
-          const titleResponse = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-              {
-                role: "system",
-                content:
-                  "Generate a clear, concise title (max 60 chars) based on the transcript content. Do not insert any additional formatting or punctuation",
-              },
-              {
-                role: "user",
-                content: formattedTranscript,
-              },
-            ],
-            temperature: 0.7,
-            max_tokens: 60,
-          });
-
-          if (!titleResponse.choices[0]?.message?.content) {
-            throw new Error("No title generated");
-          }
-
-          const title = titleResponse.choices[0].message.content.trim();
-
-          // Use createChatCompletion for insights with consolidated prompts
-          const summaryResponse = await createChatCompletion({
-            userId: req.user!.id,
-            message: formattedTranscript,
-            context: {
-              projectId,
-              transcription: formattedTranscript,
-              note: project.note?.content || "",
-            },
-            promptType: "primary",
-          });
-
-          const summary = summaryResponse.message.trim();
-
-          // Use createChatCompletion for tasks with consolidated prompts
-          const taskResponse = await createChatCompletion({
-            userId: req.user!.id,
-            message: formattedTranscript,
-            context: {
-              projectId,
-              transcription: formattedTranscript,
-              summary,
-            },
-            promptType: "todo",
-          });
-
-          const taskContent = taskResponse.message.trim();
-
-          // Only process tasks if we have valid content
-          if (!isEmptyTaskResponse(taskContent)) {
-            const tasks = taskContent
-              .split("\n")
-              .map((line) => line.trim())
-              .filter(Boolean)
-              .filter((line) => !isEmptyTaskResponse(line));
-
-            for (const task of tasks) {
-              if (!(await isDuplicateTask(task, projectId))) {
-                await db.insert(todos).values({
-                  projectId,
-                  text: task,
-                  completed: false,
-                  createdAt: new Date(),
-                  updatedAt: new Date(),
-                });
-              }
-            }
-          }
-
-          // Update project with processed information
-          const [updatedProject] = await db
-            .update(projects)
-            .set({
-              title,
-              transcription: formattedTranscript,
-              summary,
-              updatedAt: new Date(),
-            })
-            .where(eq(projects.id, projectId))
-            .returning();
-
-          // Clean up any empty tasks
-          await cleanupEmptyTasks(projectId);
-
-          res.json(updatedProject);
         } catch (error) {
           console.error("Processing error:", error);
           res.status(500).json({
-            message: "Failed to process recording",
-            error: error instanceof Error ? error.message : String(error),
+            message: error instanceof Error ? error.message : "Failed to process audio",
           });
         } finally {
           // Cleanup temporary MP3 file
