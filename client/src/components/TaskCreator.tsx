@@ -33,20 +33,20 @@ function isEmptyTaskResponse(text: string): boolean {
     "no actions",
     "tasks:", // Often precedes empty task lists
     "action items:", // Often precedes empty task lists
-    "deliverables:" // Often precedes empty task lists
+    "deliverables:", // Often precedes empty task lists
   ];
 
   // First check exact matches
   if (excludedPhrases.includes(trimmedText)) {
-    console.log('Task creation validation: Exact match found:', trimmedText);
+    console.log("Task creation validation: Exact match found:", trimmedText);
     return true;
   }
 
   // Then check for phrases within the text
-  const hasPhrase = excludedPhrases.some(phrase => {
+  const hasPhrase = excludedPhrases.some((phrase) => {
     const includes = trimmedText.includes(phrase);
     if (includes) {
-      console.log('Task creation validation: Phrase match found:', phrase);
+      console.log("Task creation validation: Phrase match found:", phrase);
     }
     return includes;
   });
@@ -54,7 +54,11 @@ function isEmptyTaskResponse(text: string): boolean {
   return hasPhrase;
 }
 
-export function TaskCreator({ className, onTaskCreated, projectId }: TaskCreatorProps) {
+export function TaskCreator({
+  className,
+  onTaskCreated,
+  projectId,
+}: TaskCreatorProps) {
   const [text, setText] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const queryClient = useQueryClient();
@@ -68,7 +72,10 @@ export function TaskCreator({ className, onTaskCreated, projectId }: TaskCreator
 
     // Validate before making the API call
     if (isEmptyTaskResponse(trimmedText)) {
-      console.log('Task creation aborted: Empty task response detected:', trimmedText);
+      console.log(
+        "Task creation aborted: Empty task response detected:",
+        trimmedText,
+      );
       setText("");
       return;
     }
@@ -77,36 +84,36 @@ export function TaskCreator({ className, onTaskCreated, projectId }: TaskCreator
       setIsCreating(true);
 
       // Log the request payload for debugging
-      console.log('Creating task:', {
+      console.log("Creating task:", {
         text: trimmedText,
-        projectId: projectId || null
+        projectId: projectId || null,
       });
 
-      const response = await fetch('/api/todos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const response = await fetch("/api/todos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: trimmedText,
-          projectId: projectId || null
+          projectId: projectId || null,
         }),
-        credentials: 'include'
+        credentials: "include",
       });
 
       if (!response.ok) {
-        throw new Error(await response.text() || 'Failed to create task');
+        throw new Error((await response.text()) || "Failed to create task");
       }
 
       const result = await response.json();
 
       // Check if the task was actually created (server might have filtered it)
       if (!result.data) {
-        console.log('Task creation skipped by server');
+        console.log("Task creation skipped by server");
         setText("");
         return;
       }
 
       // Update the cache with the new todo
-      queryClient.setQueryData<SelectTodo[]>(['/api/todos'], (old = []) => {
+      queryClient.setQueryData<SelectTodo[]>(["/api/todos"], (old = []) => {
         return [...old, result.data];
       });
 
@@ -122,14 +129,15 @@ export function TaskCreator({ className, onTaskCreated, projectId }: TaskCreator
 
       // Invalidate relevant queries to ensure consistency
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['/api/todos'] }),
-        queryClient.invalidateQueries({ queryKey: ['/api/kanban/columns'] })
+        queryClient.invalidateQueries({ queryKey: ["/api/todos"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/kanban/columns"] }),
       ]);
     } catch (error: any) {
-      console.error('Error creating todo:', error);
+      console.error("Error creating todo:", error);
       toast({
         title: "Error",
-        description: error.message || "Failed to create task. Please try again.",
+        description:
+          error.message || "Failed to create task. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -144,13 +152,17 @@ export function TaskCreator({ className, onTaskCreated, projectId }: TaskCreator
           type="text"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={projectId ? "Add a task for this recording..." : "Add a new task..."}
+          placeholder={
+            projectId ? "Add a task for this recording..." : "Add a new task..."
+          }
           className="flex-1 h-[52px] text-sm"
           disabled={isCreating}
         />
         <Button
           type="submit"
-          disabled={!text.trim() || isCreating || isEmptyTaskResponse(text.trim())}
+          disabled={
+            !text.trim() || isCreating || isEmptyTaskResponse(text.trim())
+          }
           size="icon"
           className="h-[52px] w-[52px]"
         >

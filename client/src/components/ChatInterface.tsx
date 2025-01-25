@@ -244,7 +244,7 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
             e.target.style.height = `${e.target.scrollHeight}px`;
           }}
           placeholder="Type your message..."
-          className="flex-1 min-h-[40px] max-h-[160px] resize-none py-2 overflow-y-auto"
+          className="flex-1 min-h-[40px] resize-none py-2 overflow-y-auto"
           disabled={isLoading}
           rows={1}
           onKeyDown={(e) => {
