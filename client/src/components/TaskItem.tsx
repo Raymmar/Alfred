@@ -183,12 +183,18 @@ export function TaskItem({
         <div className="flex-1 flex items-center gap-2">
           {isEditing ? (
             <div className="flex-1 flex gap-2">
-              <Input
+              <textarea
                 value={editText}
-                onChange={(e) => setEditText(e.target.value)}
-                className="flex-1"
+                onChange={(e) => {
+                  setEditText(e.target.value);
+                  // Adjust height to fit content
+                  e.target.style.height = 'auto';
+                  e.target.style.height = `${e.target.scrollHeight}px`;
+                }}
+                className="flex-1 min-h-[40px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-none overflow-hidden"
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
                     handleSave();
                   } else if (e.key === 'Escape') {
                     setIsEditing(false);
