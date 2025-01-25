@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, Send, X } from "lucide-react";
+import { Loader2, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useProjects } from "@/hooks/use-projects";
 import { cn } from "@/lib/utils";
@@ -184,10 +184,9 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
             size="sm"
             onClick={handleClearChat}
             disabled={isLoading}
-            className="h-6 w-6 group bg-background/80 backdrop-blur-sm hover:w-[85px] hover:px-2 transition-[width,padding] duration-200 shadow-sm overflow-hidden"
+            className="h-6 px-2 text-xs bg-background/80 backdrop-blur-sm hover:bg-background/90 shadow-sm"
           >
-            <X className="h-3 w-3" />
-            <span className="ml-1 text-xs opacity-0 group-hover:opacity-100 absolute left-6">Clear</span>
+            Clear Chat
           </Button>
         </div>
       )}
