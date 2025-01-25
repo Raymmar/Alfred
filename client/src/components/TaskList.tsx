@@ -43,7 +43,7 @@ export interface TaskListProps {
   className?: string;
   maintainOrder?: boolean;
   projectId?: number;
-  onRecordingClick?: (projectId: number) => void; // Added onRecordingClick prop type
+  onRecordingClick?: (projectId: number) => void;
 }
 
 export function TaskList({ className = "", maintainOrder = false, projectId, onRecordingClick }: TaskListProps) {
