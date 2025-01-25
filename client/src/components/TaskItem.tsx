@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query"; //This import was missing in the edited snippet but is present in the original, and likely needed.
 import { Pencil, Trash, MoreVertical, GripVertical } from "lucide-react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -61,7 +61,6 @@ export function TaskItem({
   const [isDeleting, setIsDeleting] = useState(false);
 
   const handleEdit = () => {
-    // If another task is being edited, don't allow editing this one
     if (editingTaskId !== null && editingTaskId !== todo.id) {
       return;
     }
@@ -141,14 +140,12 @@ export function TaskItem({
                   const button = document.getElementById(`todo-button-${todo.id}`);
                   if (button) {
                     button.classList.remove('animate-complete', 'animate-pending');
-                    // Force a reflow to restart animation
                     void button.offsetWidth;
                     button.classList.add(newState ? 'animate-complete' : 'animate-pending');
                   }
-                  // Delay the state change to allow animation to be visible
                   setTimeout(async () => {
                     await onStatusChange(newState);
-                  }, 300); // 300ms delay matches our animation duration
+                  }, 300);
                 } catch (error) {
                   console.error('Error updating todo:', error);
                   toast({
@@ -234,11 +231,9 @@ export function TaskItem({
           ) : (
             <>
               <span
-                className={`text-sm flex-1 cursor-text select-text ${
+                className={`text-sm flex-1 select-text ${
                   todo.completed ? "line-through text-muted-foreground" : ""
                 }`}
-                onClick={handleEdit}
-                onDoubleClick={handleEdit}
               >
                 {todo.text}
               </span>
