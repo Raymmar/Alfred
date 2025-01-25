@@ -78,6 +78,7 @@ export default function HomePage() {
   const [isRecording, setIsRecording] = useState(false);
   const recordingWaveformRef = useRef<HTMLDivElement>(null);
   const recordingWavesurfer = useRef<WaveSurfer | null>(null);
+  const [clearChatTrigger, setClearChatTrigger] = useState(0);
 
   useEffect(() => {
     if (recordingWaveformRef.current) {
@@ -217,11 +218,14 @@ export default function HomePage() {
         duration: 2000,
       });
 
-      const processResult = await processAudio(result.data.id);
+      const processResult = await processAudio(result.data as { id: number });
 
       if (!processResult.ok) {
         throw new Error(processResult.message);
       }
+
+      // Clear chat after successful processing
+      setClearChatTrigger(prev => prev + 1);
 
       toast({
         title: "Recording complete",
@@ -501,8 +505,17 @@ export default function HomePage() {
                             drag: true,
                             resize: true,
                           };
-                          wavesurfer.current.regions.clear();
-                          wavesurfer.current.regions.add(region);
+                          // Use WaveSurfer regions plugin API if available
+                          if ('regions' in wavesurfer.current) {
+                            const wsRegions = wavesurfer.current as unknown as { 
+                              regions: { 
+                                clear: () => void;
+                                add: (region: any) => void;
+                              } 
+                            };
+                            wsRegions.regions.clear();
+                            wsRegions.regions.add(region);
+                          }
                           wavesurfer.current.seekTo(start / duration);
                         }
                       }}
@@ -597,6 +610,7 @@ export default function HomePage() {
                 <ChatInterface
                   projectId={selectedProject?.id}
                   className="h-full"
+                  clearTrigger={clearChatTrigger}
                 />
               </TabsContent>
             </Tabs>
