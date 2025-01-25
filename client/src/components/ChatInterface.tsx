@@ -171,8 +171,22 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
     }
   };
 
+  const handleClearChat = () => {
+    queryClient.setQueryData(messagesQueryKey, []);
+  };
+
   return (
     <div className={cn("flex flex-col h-full", className)}>
+      <div className="flex justify-end p-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleClearChat}
+          disabled={!messages?.length || isLoading}
+        >
+          Clear Chat
+        </Button>
+      </div>
       <ScrollArea ref={scrollAreaRef} className="flex-1 p-2">
         <div className="space-y-4">
           {messages.map((message, i) => (
