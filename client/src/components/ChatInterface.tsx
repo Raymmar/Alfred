@@ -176,14 +176,15 @@ export function ChatInterface({ className, projectId }: ChatInterfaceProps) {
   };
 
   return (
-    <div className={cn("flex flex-col h-full", className)}>
+    <div className={cn("flex flex-col h-full relative", className)}>
       {messages?.length > 0 && (
-        <div className="flex justify-end p-2">
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10">
           <Button
-            variant="ghost"
+            variant="secondary"
             size="sm"
             onClick={handleClearChat}
             disabled={isLoading}
+            className="h-7 px-3 text-xs bg-background/80 backdrop-blur-sm hover:bg-background/90 shadow-sm"
           >
             Clear Chat
           </Button>
