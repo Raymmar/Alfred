@@ -234,10 +234,9 @@ export function TaskItem({
           ) : (
             <>
               <span
-                className={`text-sm flex-1 cursor-text select-text ${
+                className={`text-sm flex-1 cursor-default select-text ${
                   todo.completed ? "line-through text-muted-foreground" : ""
                 }`}
-                onClick={handleEdit}
                 onDoubleClick={handleEdit}
               >
                 {todo.text}
