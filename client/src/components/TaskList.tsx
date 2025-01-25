@@ -208,6 +208,7 @@ export function TaskList({ className = "", maintainOrder = false, projectId }: T
           }
           setSelectedTodos(newSelectedTodos);
         }}
+        onRecordingClick={() => {/*Implementation to handle recording click*/}} // Added onRecordingClick handler
       />
     );
   };

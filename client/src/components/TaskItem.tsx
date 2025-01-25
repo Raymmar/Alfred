@@ -24,6 +24,7 @@ interface TaskItemProps {
   setEditingTaskId?: (id: number | null) => void;
   nextTaskId?: number | null;
   onTabToNext?: () => void;
+  onRecordingClick?: (projectId: number) => void;
 }
 
 export function TaskItem({
@@ -116,7 +117,8 @@ export function TaskItem({
       ref={setNodeRef}
       style={style}
       data-task-id={todo.id}
-      className={`p-2.5 bg-card hover:bg-accent/50 transition-colors ${className} ${isDragging ? 'z-50' : ''}`}
+      onClick={() => todo.projectId && onRecordingClick?.(todo.projectId)}
+      className={`p-2.5 bg-card hover:bg-accent/50 transition-colors cursor-pointer ${className} ${isDragging ? 'z-50' : ''}`}
     >
       <div className="flex items-center gap-1.5">
         <button
